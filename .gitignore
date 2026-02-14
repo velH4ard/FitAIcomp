@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 .opencode/cache/
 node_modules/
+.DS_Store
