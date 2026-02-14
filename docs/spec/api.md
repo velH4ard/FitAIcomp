@@ -51,7 +51,6 @@ Request (JSON)
   "initData": "query_id=...&user=...&hash=..."
 }
 
-
 Response 200
 
 {
@@ -70,20 +69,38 @@ Response 200
   }
 }
 
-
 Errors
 
 AUTH_INVALID_INITDATA
 
-AUTH_EXPIRED_INITDATA (if you enforce freshness)
+AUTH_EXPIRED_INITDATA
 
 INTERNAL_ERROR
 
-Notes:
+2.2 Telegram initData Verification (Algorithm)
 
-Backend MUST verify hash using bot token.
+Backend MUST verify `initData` authenticity using the following algorithm:
 
-Backend SHOULD optionally enforce auth_date freshness (e.g., 24h).
+1. **Secret Key Derivation**:
+   `secret_key = HMAC_SHA256(key="WebAppData", message=BOT_TOKEN)`
+   *Note: HMAC "WebAppData" is a constant string.*
+
+2. **Data Check String**:
+   - Parse `initData` as a URL query string.
+   - Extract the `hash` field for comparison.
+   - Remove `hash` from the set of fields.
+   - Sort all remaining fields alphabetically by key.
+   - Construct `data_check_string` by joining fields with `\n`: `key1=value1\nkey2=value2\n...`.
+
+3. **Hash Calculation**:
+   `computed_hash = HMAC_SHA256(key=secret_key, message=data_check_string).hex()`
+
+4. **Comparison**:
+   - If `computed_hash != provided_hash`, return `AUTH_INVALID_INITDATA`.
+
+5. **Freshness Check (TTL)**:
+   - Extract `auth_date` (Unix timestamp).
+   - If `(CurrentTime - auth_date) > AUTH_INITDATA_MAX_AGE_SEC` (default: 86400 / 24h), return `AUTH_EXPIRED_INITDATA`.
 
 3. Current user / onboarding
 3.1 GET /me

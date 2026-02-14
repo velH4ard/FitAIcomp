@@ -4,3 +4,5 @@ pydantic
 pydantic-settings
 python-dotenv
 asyncpg
+python-jose[cryptography]
+python-multipart

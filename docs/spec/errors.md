@@ -90,12 +90,12 @@ Details recommended:
 
 reason: "hash_mismatch" | "missing_hash" | "invalid_format"
 
-3.3 AUTH_EXPIRED_INITDATA (401) (optional)
+3.3 AUTH_EXPIRED_INITDATA (401)
 
 When:
 
-initData auth_date is older than allowed window (e.g. > 24h)
-Only if you enforce freshness.
+initData auth_date is older than allowed window (default > 24h)
+Enforced via `AUTH_INITDATA_MAX_AGE_SEC`.
 
 4. Validation errors
 4.1 VALIDATION_FAILED (400)

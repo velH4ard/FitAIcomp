@@ -71,53 +71,68 @@ fitai/
 git clone <your-repo>
 cd fitai
 
-2. Create environment file
+### 2. Create environment file
+```bash
 cp .env.example .env
+```
 
+Fill in all required variables in `.env`:
+- `BOT_TOKEN`: Get from @BotFather
+- `JWT_SECRET`: Random long string (e.g., `openssl rand -hex 32`)
+- `OPENROUTER_API_KEY`: Get from openrouter.ai
+- `SUPABASE_URL` & `SUPABASE_SERVICE_ROLE_KEY`: From Supabase project settings
+- `YOOKASSA_SHOP_ID` & `YOOKASSA_SECRET_KEY`: From YooKassa dashboard
 
-Fill in:
-
-OPENROUTER_API_KEY
-
-SUPABASE_URL
-
-SUPABASE_SERVICE_ROLE_KEY
-
-YOOKASSA_SHOP_ID
-
-YOOKASSA_SECRET_KEY
-
-3. Run with Docker
+### 3. Run with Docker
+```bash
 docker compose up --build
+```
 
+The backend will be available at `http://localhost:8000`.
+Live reload is enabled via volume mapping in `docker-compose.yml`.
 
-Backend will be available at:
+### 4. Testing Authentication Locally
+To test authentication without a real Telegram WebApp context:
+1. Use the Swagger UI at `http://localhost:8000/docs`.
+2. For `/v1/auth/telegram`, you need a valid `initData` string. 
+3. For local development and manual testing, you can obtain `initData` from the Telegram WebApp debug console or by using a real bot.
+4. Once you have a JWT token from `/auth/telegram`, use it in the `Authorize` button in Swagger (format: `Bearer <token>`).
 
-http://localhost:8000
+---
 
-
-Swagger docs:
-
-http://localhost:8000/docs
-
-🔐 Environment Variables
+## 🔐 Environment Variables
 
 Required:
 
+```env
+# App
+APP_ENV=development
+LOG_LEVEL=info
+
+# Auth
+BOT_TOKEN=
+JWT_SECRET=
+AUTH_INITDATA_MAX_AGE_SEC=86400
+JWT_EXPIRES_SEC=604800
+
+# AI
 OPENROUTER_API_KEY=
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_MODEL=google/gemini-3.0-flash-preview
 
+# DB & Storage
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 SUPABASE_STORAGE_BUCKET=meals
 
+# Payments
 YOOKASSA_SHOP_ID=
 YOOKASSA_SECRET_KEY=
 
+# Business
 SUBSCRIPTION_PRICE_RUB=500
 SUBSCRIPTION_DURATION_DAYS=30
-
+```
 
 Never commit real values.
 
