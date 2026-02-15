@@ -1,14 +1,22 @@
 import logging
 import sys
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, APIRouter, Depends, Body
+from fastapi import FastAPI, APIRouter, Depends, Body, UploadFile, File, Header
 from .errors import setup_error_handlers, FitAIError
 from .db import db, get_db
-from .schemas import AuthRequest, AuthResponse, UserResponse, UserProfile, ProfileUpdateResponse, SubscriptionInfo
+from .schemas import (
+    AuthRequest, 
+    AuthResponse, 
+    UserResponse, 
+    UserProfile, 
+    ProfileUpdateResponse, 
+    SubscriptionInfo,
+    UsageResponse
+)
 from .auth import verify_telegram_init_data, create_access_token
 from .deps import get_current_user
 from .config import settings
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Configure logging
 logging.basicConfig(
@@ -43,14 +51,24 @@ v1_router = APIRouter(prefix="/v1")
 
 import json
 
-def format_user_response(user_dict: dict) -> UserResponse:
+def get_daily_limit(status: str) -> int:
+    if status == "active":
+        return 20
+    if status == "blocked":
+        return 0
+    return 2 # free, expired
+
+def format_user_response(user_dict: dict, used_today: int = 0) -> UserResponse:
     # Calculate subscription info
+    status = user_dict["subscription_status"]
+    daily_limit = get_daily_limit(status)
+    
     subscription = SubscriptionInfo(
-        status=user_dict["subscription_status"],
+        status=status,
         activeUntil=user_dict["subscription_active_until"],
         priceRubPerMonth=settings.SUBSCRIPTION_PRICE_RUB,
-        dailyLimit=20 if user_dict["subscription_status"] == "active" else 2,
-        usedToday=0 # Placeholder
+        dailyLimit=daily_limit,
+        usedToday=used_today
     )
     
     profile_data = user_dict.get("profile")
@@ -101,8 +119,14 @@ async def auth_telegram(payload: AuthRequest, conn = Depends(get_db)):
     )
 
 @v1_router.get("/me", response_model=UserResponse, tags=["User"])
-async def get_me(user = Depends(get_current_user)):
-    return format_user_response(user)
+async def get_me(user = Depends(get_current_user), conn = Depends(get_db)):
+    today = datetime.now(timezone.utc).date()
+    row = await conn.fetchrow(
+        "SELECT photos_used FROM usage_daily WHERE user_id = $1 AND date = $2",
+        user["id"], today
+    )
+    used_today = row["photos_used"] if row else 0
+    return format_user_response(user, used_today=used_today)
 
 @v1_router.put("/me/profile", response_model=ProfileUpdateResponse, tags=["User"])
 async def update_profile(
@@ -134,6 +158,52 @@ async def update_profile(
         isOnboarded=updated_user["is_onboarded"],
         profile=profile
     )
+
+@v1_router.get("/usage/today", response_model=UsageResponse, tags=["Usage"])
+async def get_usage_today(
+    user = Depends(get_current_user),
+    conn = Depends(get_db)
+):
+    today = datetime.now(timezone.utc).date()
+    
+    row = await conn.fetchrow(
+        "SELECT photos_used FROM usage_daily WHERE user_id = $1 AND date = $2",
+        user["id"], today
+    )
+    
+    photos_used = row["photos_used"] if row else 0
+    status = user["subscription_status"]
+    daily_limit = get_daily_limit(status)
+    
+    return UsageResponse(
+        date=today.isoformat(),
+        dailyLimit=daily_limit,
+        photosUsed=photos_used,
+        remaining=max(0, daily_limit - photos_used),
+        subscriptionStatus=status
+    )
+
+@v1_router.post("/meals/analyze", tags=["Meals"])
+async def analyze_meal(
+    file: UploadFile = File(...),
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    user = Depends(get_current_user)
+):
+    if not user["is_onboarded"]:
+        raise FitAIError(
+            code="ONBOARDING_REQUIRED",
+            message="Заполните анкету перед использованием",
+            status_code=403
+        )
+    
+    return {
+        "mealName": "Test Meal",
+        "calories": 500,
+        "protein": 30,
+        "fat": 20,
+        "carbs": 50
+    }
+
 
 @app.get("/health", tags=["Health"])
 @v1_router.get("/health", tags=["Health"])
