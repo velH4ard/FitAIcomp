@@ -1,5 +1,6 @@
 import logging
 import sys
+from typing import Optional
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, APIRouter, Depends, Body, UploadFile, File, Header
 from .errors import setup_error_handlers, FitAIError
@@ -185,10 +186,26 @@ async def get_usage_today(
 
 @v1_router.post("/meals/analyze", tags=["Meals"])
 async def analyze_meal(
-    file: UploadFile = File(...),
-    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    file: Optional[UploadFile] = File(None),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     user = Depends(get_current_user)
 ):
+    if not idempotency_key:
+        raise FitAIError(
+            code="VALIDATION_FAILED",
+            message="Некорректные данные",
+            status_code=400,
+            details={"fieldErrors": [{"field": "header.Idempotency-Key", "issue": "Field required"}]},
+        )
+
+    if file is None:
+        raise FitAIError(
+            code="VALIDATION_FAILED",
+            message="Некорректные данные",
+            status_code=400,
+            details={"fieldErrors": [{"field": "body.file", "issue": "Field required"}]},
+        )
+
     if not user["is_onboarded"]:
         raise FitAIError(
             code="ONBOARDING_REQUIRED",
