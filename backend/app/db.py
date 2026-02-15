@@ -23,6 +23,7 @@ class Database:
                 max_queries=50000,
                 max_inactive_connection_lifetime=300.0,
                 command_timeout=60.0,
+                statement_cache_size=0,
             )
             logger.info("Database pool created.")
             
@@ -48,6 +49,24 @@ class Database:
                     profile JSONB DEFAULT '{}'::jsonb,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     updated_at TIMESTAMPTZ DEFAULT NOW()
+                );
+
+                CREATE TABLE IF NOT EXISTS usage_daily (
+                    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    date DATE NOT NULL,
+                    photos_used INT NOT NULL DEFAULT 0,
+                    PRIMARY KEY (user_id, date)
+                );
+
+                CREATE TABLE IF NOT EXISTS analyze_requests (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    user_id UUID NOT NULL REFERENCES users(id),
+                    idempotency_key TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('processing', 'completed', 'failed')),
+                    response_json JSONB NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(user_id, idempotency_key)
                 );
             """)
             logger.info("Database tables initialized.")

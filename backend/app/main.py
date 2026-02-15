@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, APIRouter, Depends, Body, UploadFile, File, Header
 from .errors import setup_error_handlers, FitAIError
 from .db import db, get_db
+import asyncpg
 from .schemas import (
     AuthRequest, 
     AuthResponse, 
@@ -188,7 +189,8 @@ async def get_usage_today(
 async def analyze_meal(
     file: Optional[UploadFile] = File(None),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    user = Depends(get_current_user)
+    user = Depends(get_current_user),
+    conn = Depends(get_db)
 ):
     if not idempotency_key:
         raise FitAIError(
@@ -212,14 +214,112 @@ async def analyze_meal(
             message="Заполните анкету перед использованием",
             status_code=403
         )
+
+    # Idempotency begin
+    try:
+        await conn.execute(
+            """
+            INSERT INTO analyze_requests (user_id, idempotency_key, status)
+            VALUES ($1, $2, 'processing')
+            """,
+            user["id"], idempotency_key
+        )
+    except asyncpg.UniqueViolationError:
+        row = await conn.fetchrow(
+            "SELECT status, response_json FROM analyze_requests WHERE user_id = $1 AND idempotency_key = $2",
+            user["id"], idempotency_key
+        )
+        if row and row["status"] == "completed" and row["response_json"] is not None:
+            # asyncpg returns JSONB as dict/list
+            return row["response_json"]
+        raise FitAIError(
+            code="IDEMPOTENCY_CONFLICT",
+            message="Запрос с таким ключом уже обрабатывается или завершился ошибкой",
+            status_code=409
+        )
+
+    today = datetime.now(timezone.utc).date()
+    status = user["subscription_status"]
+    daily_limit = get_daily_limit(status)
     
-    return {
-        "mealName": "Test Meal",
-        "calories": 500,
-        "protein": 30,
-        "fat": 20,
-        "carbs": 50
-    }
+    quota_reserved = False
+    try:
+        # Quota reserve in transaction
+        async with conn.transaction():
+            await conn.execute(
+                """
+                INSERT INTO usage_daily (user_id, date, photos_used)
+                VALUES ($1, $2, 0)
+                ON CONFLICT (user_id, date) DO NOTHING
+                """,
+                user["id"], today
+            )
+            
+            row = await conn.fetchrow(
+                "SELECT photos_used FROM usage_daily WHERE user_id = $1 AND date = $2 FOR UPDATE",
+                user["id"], today
+            )
+            
+            if row["photos_used"] >= daily_limit:
+                await conn.execute(
+                    "UPDATE analyze_requests SET status = 'failed', updated_at = NOW() WHERE user_id = $1 AND idempotency_key = $2",
+                    user["id"], idempotency_key
+                )
+                raise FitAIError(
+                    code="QUOTA_EXCEEDED",
+                    message="Достигнут дневной лимит фото",
+                    status_code=403,
+                    details={"limit": daily_limit, "used": row["photos_used"], "status": status}
+                )
+            
+            await conn.execute(
+                "UPDATE usage_daily SET photos_used = photos_used + 1 WHERE user_id = $1 AND date = $2",
+                user["id"], today
+            )
+            quota_reserved = True
+            
+        response_data = {
+            "mealName": "Test Meal",
+            "calories": 500,
+            "protein": 30,
+            "fat": 20,
+            "carbs": 50,
+        }
+        
+        await conn.execute(
+            """
+            UPDATE analyze_requests 
+            SET status = 'completed', response_json = $1, updated_at = NOW() 
+            WHERE user_id = $2 AND idempotency_key = $3
+            """,
+            response_data, user["id"], idempotency_key
+        )
+        
+        return response_data
+
+    except Exception as e:
+        if quota_reserved:
+            async with conn.transaction():
+                await conn.execute(
+                    "UPDATE usage_daily SET photos_used = GREATEST(0, photos_used - 1) WHERE user_id = $1 AND date = $2",
+                    user["id"], today
+                )
+                await conn.execute(
+                    "UPDATE analyze_requests SET status = 'failed', updated_at = NOW() WHERE user_id = $1 AND idempotency_key = $2",
+                    user["id"], idempotency_key
+                )
+        else:
+            # If failed before quota reserve, still mark request as failed
+            await conn.execute(
+                "UPDATE analyze_requests SET status = 'failed', updated_at = NOW() WHERE user_id = $1 AND idempotency_key = $2",
+                user["id"], idempotency_key
+            )
+        
+        if isinstance(e, FitAIError):
+            raise e
+        
+        logger.error(f"Error in analyze_meal: {e}")
+        raise FitAIError(code="INTERNAL_ERROR", message="Внутренняя ошибка сервера", status_code=500)
 
 
 @app.get("/health", tags=["Health"])
