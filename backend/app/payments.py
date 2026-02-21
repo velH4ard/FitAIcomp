@@ -168,7 +168,53 @@ def _webhook_verification_ok(authorization: Optional[str]) -> bool:
     return username_ok and password_ok
 
 
-def _verify_yookassa_webhook(request: Request, payload: dict[str, Any]) -> bool:
+async def _provider_webhook_verification_ok(payload: dict[str, Any]) -> bool:
+    object_raw = payload.get("object")
+    payment_object = object_raw if isinstance(object_raw, dict) else {}
+    payment_id = str(payment_object.get("id") or "")
+    if not payment_id:
+        return False
+
+    try:
+        timeout = httpx.Timeout(connect=2.0, read=3.0, write=3.0, pool=2.0)
+        async with httpx.AsyncClient(timeout=timeout, base_url=settings.YOOKASSA_API_BASE_URL) as client:
+            response = await client.get(
+                f"/payments/{payment_id}",
+                auth=(settings.YOOKASSA_SHOP_ID, settings.YOOKASSA_SECRET_KEY),
+            )
+        if response.status_code >= 400:
+            return False
+        fetched = response.json() if response.content else None
+        if not isinstance(fetched, dict):
+            return False
+
+        fetched_id = str(fetched.get("id") or "")
+        if fetched_id != payment_id:
+            return False
+
+        payload_status_raw = payment_object.get("status")
+        payload_status = payload_status_raw if isinstance(payload_status_raw, str) else ""
+        fetched_status_raw = fetched.get("status")
+        fetched_status = fetched_status_raw if isinstance(fetched_status_raw, str) else ""
+        if payload_status and fetched_status and payload_status != fetched_status:
+            return False
+
+        payload_paid = payment_object.get("paid")
+        fetched_paid = fetched.get("paid")
+        if isinstance(payload_paid, bool) and isinstance(fetched_paid, bool) and payload_paid != fetched_paid:
+            return False
+
+        event_raw = payload.get("event")
+        event = event_raw if isinstance(event_raw, str) else ""
+        if event == "payment.succeeded" and not (fetched_status == "succeeded" and bool(fetched_paid) is True):
+            return False
+
+        return True
+    except Exception:
+        return False
+
+
+async def _verify_yookassa_webhook(request: Request, payload: dict[str, Any]) -> bool:
     if not _client_ip_allowed(request):
         logger.warning("PAYMENT_WEBHOOK_IP_BLOCKED ip=%s", _extract_client_ip(request) or "unknown")
         return False
@@ -176,6 +222,10 @@ def _verify_yookassa_webhook(request: Request, payload: dict[str, Any]) -> bool:
     authorization = request.headers.get("Authorization")
     if _webhook_verification_ok(authorization):
         return True
+
+    if not authorization and _is_production():
+        if await _provider_webhook_verification_ok(payload):
+            return True
 
     bypass_enabled = settings.payments_webhook_dev_bypass_enabled()
     is_production = _is_production()
@@ -194,8 +244,8 @@ def _verify_yookassa_webhook(request: Request, payload: dict[str, Any]) -> bool:
     return False
 
 
-def verify_yookassa_webhook(request: Request, payload: dict[str, Any]) -> bool:
-    return _verify_yookassa_webhook(request, payload)
+async def verify_yookassa_webhook(request: Request, payload: dict[str, Any]) -> bool:
+    return await _verify_yookassa_webhook(request, payload)
 
 
 def _webhook_dedupe_key(payload: dict[str, Any]) -> str:
@@ -1068,7 +1118,10 @@ async def yookassa_webhook(
             details={"stage": "webhook_parse"},
         )
 
-    if not verify_yookassa_webhook(request, payload):
+    verify_result = verify_yookassa_webhook(request, payload)
+    verify_ok = await verify_result if inspect.isawaitable(verify_result) else bool(verify_result)
+
+    if not verify_ok:
         logger.info(
             "PAYMENT_WEBHOOK_RECEIVED context=%s",
             log_ctx_json(
