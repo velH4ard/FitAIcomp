@@ -85,3 +85,52 @@ async def test_update_profile_invalid_enum(client):
     assert response.json()["error"]["code"] == "VALIDATION_FAILED"
     
     del app.dependency_overrides[get_current_user]
+
+
+@pytest.mark.asyncio
+async def test_update_profile_gender_other_rejected(client):
+    mock_user = {"id": "00000000-0000-0000-0000-000000000000"}
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+
+    invalid_profile = {
+        "gender": "other",
+        "age": 25,
+        "heightCm": 180,
+        "weightKg": 75.5,
+        "goal": "maintain",
+    }
+
+    response = await client.put("/v1/me/profile", json=invalid_profile)
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VALIDATION_FAILED"
+
+    del app.dependency_overrides[get_current_user]
+
+
+@pytest.mark.asyncio
+async def test_patch_profile_goal_success(client):
+    mock_user = {"id": "00000000-0000-0000-0000-000000000000"}
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+
+    mock_conn = AsyncMock()
+    mock_conn.fetchrow.return_value = {
+        "daily_goal_auto": 2100,
+        "daily_goal_override": 2300,
+    }
+
+    async def override_get_db():
+        yield mock_conn
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        response = await client.patch("/v1/profile/goal", json={"dailyGoal": 2300})
+        assert response.status_code == 200
+        assert response.json() == {
+            "dailyGoal": 2300,
+            "autoGoal": 2100,
+            "override": 2300,
+        }
+    finally:
+        del app.dependency_overrides[get_current_user]
+        del app.dependency_overrides[get_db]

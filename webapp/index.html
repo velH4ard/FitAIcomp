@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FitAI WebApp Test</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  </head>
+  <body style="font-family: -apple-system, system-ui; padding: 16px;">
+    <h2>FitAI WebApp Test</h2>
+    <button id="copy">Copy initData</button>
+    <pre id="out" style="white-space: pre-wrap; word-break: break-all; margin-top: 12px;"></pre>
+
+    <script>
+      const out = document.getElementById("out");
+      const initData = window.Telegram?.WebApp?.initData || "";
+      out.textContent = initData ? initData : "NO_TELEGRAM_WEBAPP (open this via Telegram bot WebApp button)";
+
+      document.getElementById("copy").onclick = async () => {
+        const text = window.Telegram?.WebApp?.initData || "";
+        if (!text) {
+          alert("No initData. Open inside Telegram WebApp via bot menu button.");
+          return;
+        }
+        await navigator.clipboard.writeText(text);
+        alert("initData copied to clipboard");
+      };
+    </script>
+  </body>
+</html>

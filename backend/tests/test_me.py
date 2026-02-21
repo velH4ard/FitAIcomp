@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime, timezone
 from app.main import app
 from app.deps import get_current_user
 
@@ -19,7 +20,7 @@ async def test_get_me_success(client):
         "username": "testuser",
         "is_onboarded": True,
         "subscription_status": "active",
-        "subscription_active_until": None,
+        "subscription_active_until": datetime(2099, 1, 1, tzinfo=timezone.utc),
         "profile": '{"gender": "male", "age": 25, "heightCm": 180, "weightKg": 75, "goal": "maintain"}'
     }
     

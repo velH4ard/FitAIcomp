@@ -3,6 +3,7 @@ from typing import Optional
 from .auth import decode_access_token
 from .db import get_db
 from .errors import FitAIError
+from .goals import normalize_gender
 import json
 
 async def get_current_user(
@@ -22,7 +23,13 @@ async def get_current_user(
     
     # Fetch user from DB
     row = await conn.fetchrow(
-        "SELECT id, telegram_id, username, is_onboarded, subscription_status, subscription_active_until, profile FROM users WHERE id = $1",
+        """
+        SELECT id, telegram_id, username, is_onboarded, subscription_status,
+               subscription_active_until, referral_credits, profile,
+               daily_goal_auto, daily_goal_override
+        FROM users
+        WHERE id = $1
+        """,
         user_id
     )
     
@@ -38,5 +45,8 @@ async def get_current_user(
             user["profile"] = json.loads(user["profile"])
         except:
             user["profile"] = {}
+
+    if isinstance(user.get("profile"), dict) and "gender" in user["profile"]:
+        user["profile"]["gender"] = normalize_gender(user["profile"].get("gender"))
             
     return user

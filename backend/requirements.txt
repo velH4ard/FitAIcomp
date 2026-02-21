@@ -6,3 +6,5 @@ python-dotenv
 asyncpg
 python-jose[cryptography]
 python-multipart
+jsonschema
+httpx

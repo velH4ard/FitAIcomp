@@ -23,6 +23,7 @@ All API endpoints MUST use this format for non-2xx responses.
     "details": {}
   }
 }
+```
 
 Rules:
 
@@ -32,12 +33,19 @@ message is safe to show to the user (no secrets)
 
 details is optional and MUST NOT contain secrets (API keys, tokens)
 
+Request correlation:
+
+- Backend MUST return `X-Request-Id` response header for all error responses as well (same as success responses).
+- This spec does not require `requestId` inside the JSON error body; correlation is header-based.
+
 2. HTTP status rules
 2.1 General mapping (recommended)
 
 400 — request is invalid / schema validation failed
 
 401 — user not authenticated / token invalid
+
+402 — paywall blocked (premium endpoint requires active subscription)
 
 403 — authenticated but not allowed (rare on MVP)
 
@@ -59,6 +67,13 @@ Normative:
 
 Backend MUST always return our JSON error body even for 5xx.
 
+Referral-specific mapping (normative):
+
+- `INVALID_REFERRAL_CODE` -> `400`
+- `REFERRAL_ALREADY_REDEEMED` -> `409`
+- `REFERRAL_SELF_REDEEM` -> `409`
+- `RATE_LIMITED` -> `429` (reuse for referral redeem anti-abuse guard)
+
 3. Auth errors
 3.1 UNAUTHORIZED (401)
 
@@ -76,6 +91,26 @@ Example:
   "error": {
     "code": "UNAUTHORIZED",
     "message": "Требуется авторизация",
+    "details": {}
+  }
+}
+
+3.1.1 FORBIDDEN (403)
+
+When:
+
+authenticated user has no permission for the requested endpoint/action
+
+MVP usage:
+
+- internal admin endpoints (for example `GET /v1/admin/stats`) for non-admin users
+
+Example:
+
+{
+  "error": {
+    "code": "FORBIDDEN",
+    "message": "Недостаточно прав",
     "details": {}
   }
 }
@@ -109,6 +144,8 @@ required fields missing
 enum value invalid
 
 AI output JSON failed schema validation (see ai-contract.md)
+
+invalid query parameters (e.g., `date` format for `/v1/stats/daily`)
 
 Details recommended:
 
@@ -215,6 +252,105 @@ Example:
   }
 }
 
+5.4 IDEMPOTENCY_CONFLICT (409)
+
+When:
+
+idempotency key already exists for the same user with non-replayable state
+
+MVP `/v1/meals/analyze` behavior:
+
+- `completed` + stored response -> return cached `200` (not this error)
+- `processing` or `failed` -> return `IDEMPOTENCY_CONFLICT`
+
+Details recommended:
+
+state (optional): `processing|failed`
+
+5.5 INVALID_REFERRAL_CODE (400)
+
+When:
+
+- referral code is unknown
+- referral code is inactive/disabled
+
+Example:
+
+{
+  "error": {
+    "code": "INVALID_REFERRAL_CODE",
+    "message": "Неверный реферальный код",
+    "details": {}
+  }
+}
+
+5.6 REFERRAL_ALREADY_REDEEMED (409)
+
+When:
+
+- user already redeemed a referral code earlier (one-time redeem policy)
+
+Example:
+
+{
+  "error": {
+    "code": "REFERRAL_ALREADY_REDEEMED",
+    "message": "Реферальный код уже был активирован",
+    "details": {}
+  }
+}
+
+5.7 REFERRAL_SELF_REDEEM (409)
+
+When:
+
+- user attempts to redeem own referral code
+
+Example:
+
+{
+  "error": {
+    "code": "REFERRAL_SELF_REDEEM",
+    "message": "Нельзя активировать собственный реферальный код",
+    "details": {}
+  }
+}
+
+5.8 PAYWALL_BLOCKED (402)
+
+When:
+
+- user calls premium endpoint without active subscription (`free|expired|blocked`)
+
+MVP usage:
+
+- `GET /v1/reports/weekly`
+- `GET /v1/reports/monthly`
+- `GET /v1/analysis/why-not-losing`
+- `GET /v1/charts/weight`
+
+Details (authoritative):
+
+- `feature`: string (`reports.weekly|reports.monthly|analysis.why_not_losing|charts.weight`)
+- `prices.original`: `1499`
+- `prices.current`: `499`
+
+Example:
+
+{
+  "error": {
+    "code": "PAYWALL_BLOCKED",
+    "message": "Функция доступна только в Premium",
+    "details": {
+      "feature": "reports.weekly",
+      "prices": {
+        "original": 1499,
+        "current": 499
+      }
+    }
+  }
+}
+
 6. Storage / AI provider errors
 6.1 STORAGE_ERROR (502)
 
@@ -294,11 +430,50 @@ When:
 
 technical throttling (e.g., 1 request / 3 seconds)
 
+anti-abuse throttle for hot endpoints (MVP: `/v1/meals/analyze`, `/v1/referral/redeem`)
+
 Do NOT use for daily quota; use QUOTA_EXCEEDED
+
+HTTP status:
+
+`429 Too Many Requests`
+
+Response format:
+
+MUST use standard FitAIError envelope:
+
+{
+  "error": {
+    "code": "RATE_LIMITED",
+    "message": "Слишком много запросов, попробуйте позже",
+    "details": {}
+  }
+}
 
 Details recommended:
 
 retryAfterSeconds
+
+windowSeconds
+
+limit (when available)
+
+scope (optional, e.g. "analyze")
+
+Example:
+
+{
+  "error": {
+    "code": "RATE_LIMITED",
+    "message": "Слишком много запросов, попробуйте позже",
+    "details": {
+      "retryAfterSeconds": 60,
+      "windowSeconds": 60,
+      "limit": 1,
+      "scope": "analyze"
+    }
+  }
+}
 
 9. Internal
 9.1 INTERNAL_ERROR (500)

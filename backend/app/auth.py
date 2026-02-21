@@ -19,7 +19,12 @@ def verify_telegram_init_data(init_data: str) -> Dict[str, Any]:
     try:
         vals = dict(parse_qsl(init_data))
         if "hash" not in vals:
-            raise FitAIError(code="AUTH_INVALID_INITDATA", message="Missing hash", status_code=401)
+            raise FitAIError(
+                code="AUTH_INVALID_INITDATA",
+                message="Некорректные данные Telegram",
+                status_code=401,
+                details={"reason": "missing_hash"},
+            )
         
         received_hash = vals.pop("hash")
         
@@ -42,23 +47,42 @@ def verify_telegram_init_data(init_data: str) -> Dict[str, Any]:
         
         # 4. Comparison
         if not secrets.compare_digest(computed_hash, received_hash):
-            raise FitAIError(code="AUTH_INVALID_INITDATA", message="Hash mismatch", status_code=401)
+            raise FitAIError(
+                code="AUTH_INVALID_INITDATA",
+                message="Некорректные данные Telegram",
+                status_code=401,
+                details={"reason": "hash_mismatch"},
+            )
         
         # 5. Freshness Check
         auth_date = int(vals.get("auth_date", 0))
-        if (time.time() - auth_date) > settings.AUTH_INITDATA_MAX_AGE_SEC:
-            raise FitAIError(code="AUTH_EXPIRED_INITDATA", message="Init data expired", status_code=401)
+        if (time.time() - auth_date) > settings.get_telegram_initdata_max_age_sec():
+            raise FitAIError(
+                code="AUTH_EXPIRED_INITDATA",
+                message="Сессия Telegram истекла",
+                status_code=401,
+            )
             
         # Extract user data
         user_str = vals.get("user")
         if not user_str:
-            raise FitAIError(code="AUTH_INVALID_INITDATA", message="Missing user data", status_code=401)
+            raise FitAIError(
+                code="AUTH_INVALID_INITDATA",
+                message="Некорректные данные Telegram",
+                status_code=401,
+                details={"reason": "missing_user"},
+            )
             
         return json.loads(user_str)
     except FitAIError:
         raise
-    except Exception as e:
-        raise FitAIError(code="AUTH_INVALID_INITDATA", message=str(e), status_code=401)
+    except Exception:
+        raise FitAIError(
+            code="AUTH_INVALID_INITDATA",
+            message="Некорректные данные Telegram",
+            status_code=401,
+            details={"reason": "invalid_format"},
+        )
 
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()

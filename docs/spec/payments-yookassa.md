@@ -3,7 +3,7 @@
 ## 0. Goal
 
 Implement subscription payments:
-- Price: **500 RUB / month**
+- Price: **499 RUB / 30 days** (marketing copy: **1499 -> 499**)
 - Flow: create payment → user pays → YooKassa webhook confirms → activate subscription
 
 Constraints:
@@ -44,7 +44,7 @@ Backend must use env variables:
 - `YOOKASSA_SHOP_ID`
 - `YOOKASSA_SECRET_KEY`
 - `YOOKASSA_RETURN_URL_DEFAULT` (optional)
-- `SUBSCRIPTION_PRICE_RUB=500`
+- `SUBSCRIPTION_PRICE_RUB=499`
 - `SUBSCRIPTION_DURATION_DAYS=30` (MVP: 30 days)
 
 Security:
@@ -98,7 +98,7 @@ authenticate user (Bearer token)
 
 build YooKassa create-payment request:
 
-amount: 500.00 RUB
+amount: 499.00 RUB
 
 description: "FitAI subscription 1 month"
 
@@ -114,7 +114,7 @@ user_id (internal uuid)
 
 telegram_id
 
-plan = "monthly_500"
+plan = "monthly_499"
 
 send request to YooKassa
 
@@ -298,13 +298,19 @@ invalid signature → PAYMENT_WEBHOOK_INVALID
 
 refunded event (after paid) → mark blocked/expired (choose MVP rule)
 
+9.3 Auto-renew policy (MVP)
+
+- Billing is manual repurchase only.
+- Auto-renew/recurring payments MUST NOT be implemented in MVP.
+- `POST /v1/subscription/cancel` is reserved only for future recurring billing and MUST return `NOT_IMPLEMENTED` if present.
+
 10. MVP policy decisions (explicit)
 
-Only one plan: 500 RUB / 30 days.
+Only one plan: 499 RUB / 30 days (marketing copy: 1499 -> 499).
 
 No free trial.
 
-No cancel/auto-renew logic in MVP, unless you later implement recurring payments.
+No cancel/auto-renew logic in MVP.
 
 Refund behavior (choose now):
 

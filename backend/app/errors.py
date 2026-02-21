@@ -4,6 +4,8 @@ from fastapi.exceptions import RequestValidationError
 from typing import Optional
 import logging
 
+from .observability import REQUEST_ID_HEADER, get_request_id, log_ctx, log_ctx_json
+
 logger = logging.getLogger("fitai-errors")
 
 class FitAIError(Exception):
@@ -14,15 +16,23 @@ class FitAIError(Exception):
         self.details = details or {}
 
 def setup_error_handlers(app: FastAPI):
+    def _json_error_response(request: Request, status_code: int, content: dict) -> JSONResponse:
+        response = JSONResponse(status_code=status_code, content=content)
+        request_id = get_request_id(request)
+        if request_id:
+            response.headers[REQUEST_ID_HEADER] = request_id
+        return response
+
     @app.exception_handler(FitAIError)
     async def fitai_error_handler(request: Request, exc: FitAIError):
-        return JSONResponse(
+        return _json_error_response(
+            request=request,
             status_code=exc.status_code,
             content={
                 "error": {
                     "code": exc.code,
                     "message": exc.message,
-                    "details": exc.details
+                    "details": exc.details,
                 }
             },
         )
@@ -36,13 +46,14 @@ def setup_error_handlers(app: FastAPI):
                 "issue": error["msg"]
             })
         
-        return JSONResponse(
+        return _json_error_response(
+            request=request,
             status_code=400,
             content={
                 "error": {
                     "code": "VALIDATION_FAILED",
                     "message": "Некорректные данные",
-                    "details": {"fieldErrors": field_errors}
+                    "details": {"fieldErrors": field_errors},
                 }
             },
         )
@@ -56,27 +67,33 @@ def setup_error_handlers(app: FastAPI):
         elif exc.status_code == 404:
             code = "NOT_FOUND"
         
-        return JSONResponse(
+        return _json_error_response(
+            request=request,
             status_code=exc.status_code,
             content={
                 "error": {
                     "code": code,
                     "message": exc.detail if isinstance(exc.detail, str) else "Ошибка",
-                    "details": {}
+                    "details": {},
                 }
             },
         )
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
-        logger.error(f"Unhandled exception: {exc}", exc_info=True)
-        return JSONResponse(
+        logger.error(
+            "Unhandled exception context=%s",
+            log_ctx_json(log_ctx(request, extra={"status_code": 500})),
+            exc_info=True,
+        )
+        return _json_error_response(
+            request=request,
             status_code=500,
             content={
                 "error": {
                     "code": "INTERNAL_ERROR",
                     "message": "Внутренняя ошибка сервера",
-                    "details": {} # Do not leak internal details in production
+                    "details": {},  # Do not leak internal details in production
                 }
             },
         )
