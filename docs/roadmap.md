@@ -9,7 +9,7 @@ Primary goal:
 MVP goal:
 - Launch working Telegram WebApp
 - Stable AI photo analysis
-- Subscription 500 RUB/month via YooKassa
+- Subscription 499 RUB / 30 days via YooKassa (marketing copy: 1499 -> 499)
 - 2 free / 20 premium daily photo limits
 - Usable daily calorie tracking with statistics
 
@@ -120,7 +120,7 @@ Enable paid subscription via YooKassa.
 - GET /subscription
 
 ### Done when:
-- User can pay 500 RUB
+- User can pay 499 RUB
 - Subscription activates for 30 days
 - Active users get 20 photos/day
 - Expired users revert to 2/day
@@ -204,7 +204,7 @@ Metrics to track:
 # Phase 7 — Scale to Revenue Target
 
 Target math:
-- Subscription: 500 RUB (~$5–6)
+- Subscription: 499 RUB (~$5–6)
 - To reach $10k/month:
   ~1500–2000 paying users (depending on exchange rate)
 
@@ -237,7 +237,7 @@ MVP is complete when:
   - Upload photo
   - See calorie breakdown
   - Track daily stats
-  - Buy subscription (500 RUB)
+  - Buy subscription (499 RUB)
 - Quota 2/20 works reliably
 - Webhook secure
 - System stable under 100 concurrent users
@@ -264,4 +264,3 @@ Build the smallest system that:
 - Makes money
 - Can scale incrementally
 - Does not collapse under agent-driven development
-
