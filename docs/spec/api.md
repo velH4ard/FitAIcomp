@@ -419,6 +419,393 @@ Backward compatibility
 - `description` is optional and additive for request payload.
 - Response contract remains unchanged: `{ meal, usage }`.
 
+5.1.1 POST /meals/analysis-step1
+
+Step 1 of structured analysis pipeline: upload photo and get detected food candidates for user weight input.
+
+This endpoint is additive and MUST NOT change behavior of `POST /v1/meals/analyze`.
+
+Headers
+
+Authorization: Bearer <accessToken>
+
+Body
+
+multipart/form-data
+
+- `image` (file, required)
+- `description` (string, optional) — additional context for classification
+  - max length: `500` chars
+  - backend MUST trim leading/trailing whitespace before validation
+  - if trimmed value is empty, backend MUST treat it as absent
+
+Response 200
+
+```json
+{
+  "analysisSessionId": "uuid",
+  "recognized": true,
+  "overallConfidence": 0.74,
+  "items": [
+    {
+      "clientItemId": "item_1",
+      "name": "плов",
+      "matchType": "exact",
+      "confidence": 0.78,
+      "nutritionPer100g": {
+        "calories_kcal": 180,
+        "protein_g": 9,
+        "fat_g": 6,
+        "carbs_g": 22
+      },
+      "defaultWeightG": 250,
+      "warnings": []
+    },
+    {
+      "clientItemId": "item_2",
+      "name": "соус",
+      "matchType": "fuzzy",
+      "confidence": 0.42,
+      "nutritionPer100g": {
+        "calories_kcal": 140,
+        "protein_g": 2,
+        "fat_g": 10,
+        "carbs_g": 9
+      },
+      "defaultWeightG": null,
+      "warnings": [
+        "Нет точного совпадения, использована приблизительная категория."
+      ]
+    }
+  ],
+  "warnings": [
+    "Проверьте названия и введите фактический вес каждого блюда."
+  ],
+  "expiresAt": "2026-02-13T10:20:00Z"
+}
+```
+
+Request schema (authoritative)
+
+- content type: `multipart/form-data`
+- `image`: required file
+- `description`: optional string, trimmed length `1..500` when present
+
+Response schema (authoritative)
+
+- `analysisSessionId`: `uuid` (session owned by authenticated user)
+- `recognized`: boolean
+- `overallConfidence`: number, `0..1`
+- `items`: array
+- `items[].clientItemId`: string, non-empty, unique inside response
+- `items[].name`: string, non-empty
+- `items[].matchType`: `exact|fuzzy|unknown`
+- `items[].confidence`: number, `0..1`
+- `items[].nutritionPer100g.calories_kcal|protein_g|fat_g|carbs_g`: number, `>=0`
+- `items[].defaultWeightG`: number, `>0` or `null`
+- `items[].warnings`: array of RU strings, max 5 items
+- `warnings`: array of RU strings
+- `expiresAt`: `ISO 8601 datetime`
+
+Validation rules (normative)
+
+- onboarding is required; otherwise `ONBOARDING_REQUIRED`
+- payload validation errors return `VALIDATION_FAILED`
+- if image is too large, return `PAYLOAD_TOO_LARGE`
+- backend MUST validate AI classifier output against `docs/spec/ai-contract.md` Step 1 schema before creating session
+
+Deterministic behavior (normative)
+
+- Backend MUST create `analysisSessionId` and persist step1 items snapshot for step2 calculations.
+- `analysisSessionId` MUST belong to authenticated user only.
+- Session TTL is `15` minutes; expired sessions are not accepted by step2.
+- If food is not identifiable, backend MUST return:
+  - `recognized=false`
+  - `overallConfidence<=0.2`
+  - `items=[]`
+  - `warnings` containing RU explanation
+- For `matchType=fuzzy` backend MUST include item-level warning about approximate match.
+- For `matchType=unknown` backend MUST include item-level warning that nutrition is approximate.
+- Step1 MUST NOT persist meal entry and MUST NOT change daily usage counters.
+
+Confidence rules for Step1 API response (normative)
+
+- All confidence values MUST be in range `[0, 1]` and rounded to 2 decimals.
+- `overallConfidence` MUST be deterministic for the same persisted step1 snapshot.
+- If `recognized=false`, backend MUST return `overallConfidence <= 0.2`.
+- If `recognized=true` and `items` is non-empty, backend MUST compute:
+  - `overallConfidence = round(avg(items[].confidence), 2)`
+  - where `avg` is arithmetic mean across returned items.
+- Per-item confidence MUST follow resolver stage ranges:
+  - exact name match: `0.90..1.00`
+  - exact alias match: `0.75..0.89`
+  - fuzzy match (`similarity >= 0.35`): `0.35..0.74`
+  - ILIKE fallback match: `0.35..0.55` (returned as `matchType=fuzzy`)
+  - unknown (no reliable match): `0.00..0.34` (returned as `matchType=unknown`)
+
+Foods lookup and fallback behavior (normative)
+
+- Step1 candidate normalization uses deterministic matching against backend local foods lookup data (Postgres/Supabase reference tables in RU domain).
+- Backend MUST assign `matchType` by lookup result:
+  - `exact` — deterministic exact match in reference data.
+  - `fuzzy` — deterministic approximate match in reference data.
+  - `unknown` — no reliable match found.
+- Matching priority MUST be evaluated in this strict order (first successful stage wins):
+  1. exact name
+  2. exact alias
+  3. fuzzy (`similarity >= 0.35`)
+  4. ILIKE fallback
+- For `exact`, item `warnings` SHOULD be empty unless there is a specific uncertainty reason.
+- For `fuzzy`, backend MUST include RU warning that category/match is approximate.
+- For `unknown`, backend MUST include RU warning that nutrition is approximate.
+- Backend MUST always return non-negative numeric `nutritionPer100g` for every item, including `unknown`.
+- If a matched `state` record has missing/partial exact nutrition (one or more of `calories_kcal|protein_g|fat_g|carbs_g`), backend MUST fallback to matched `base_name` nutrition and append RU warning.
+- If `base_name` nutrition is also unavailable, backend MUST return `matchType=unknown` with deterministic conservative fallback nutrition and append RU warning.
+- If lookup result is partial (for example, missing one or more macros), backend MUST fill missing nutrition fields with deterministic conservative fallback values and append RU warning describing fallback usage.
+- Step1 response MUST remain valid and non-empty even when all candidates are `unknown` (unless photo is not recognized, where `items=[]` per contract).
+
+Example fallback warning strings (RU, recommended)
+
+- `"Нет точного совпадения, использована приблизительная категория."`
+- `"Не найдено в базе продуктов, использована приблизительная пищевая ценность."`
+- `"Часть нутриентов заполнена консервативным fallback-значением."`
+- `"Для варианта блюда нет точного КБЖУ, использованы значения базового продукта."`
+
+Errors
+
+- `UNAUTHORIZED`
+- `ONBOARDING_REQUIRED`
+- `VALIDATION_FAILED`
+- `PAYLOAD_TOO_LARGE`
+- `AI_PROVIDER_ERROR`
+- `STORAGE_ERROR`
+- `RATE_LIMITED` (technical anti-abuse throttle)
+- `INTERNAL_ERROR`
+
+5.1.2 POST /meals/analysis-step2
+
+Step 2 of structured analysis pipeline: submit final item weights and persist meal + usage.
+
+Headers
+
+Authorization: Bearer <accessToken>
+
+Idempotency-Key: <string> (RECOMMENDED; optional but strongly recommended)
+
+Request (JSON)
+
+```json
+{
+  "analysisSessionId": "uuid",
+  "mealTime": "lunch",
+  "items": [
+    {
+      "clientItemId": "item_1",
+      "weight_g": 280,
+      "adjustedName": "Плов с курицей"
+    },
+    {
+      "clientItemId": "item_2",
+      "weight_g": 35
+    }
+  ]
+}
+```
+
+Request schema (authoritative)
+
+- `analysisSessionId`: required `uuid`
+- `mealTime`: optional `breakfast|lunch|dinner|snack|unknown`; default `unknown`
+- `items`: required array, min `1`, max `20`
+- `items[].clientItemId`: required string, non-empty
+- `items[].weight_g`: required number, `>0`, `<=3000`
+- `items[].adjustedName`: optional string, user-provided correction for the matched name
+
+Response 200
+
+```json
+{
+  "meal": {
+    "id": "uuid",
+    "createdAt": "2026-02-13T10:15:00Z",
+    "mealTime": "lunch",
+    "imageUrl": "https://.../signed-or-public-url",
+    "ai": {
+      "provider": "openrouter",
+      "model": "google/gemini-3.0-flash-preview",
+      "confidence": 0.74
+    },
+    "result": {
+      "recognized": true,
+      "overall_confidence": 0.74,
+      "totals": {
+        "calories_kcal": 553.0,
+        "protein_g": 29.7,
+        "fat_g": 20.3,
+        "carbs_g": 61.9
+      },
+      "items": [
+        {
+          "name": "плов",
+          "grams": 280,
+          "calories_kcal": 504,
+          "protein_g": 25.2,
+          "fat_g": 16.8,
+          "carbs_g": 61.6,
+          "confidence": 0.78
+        },
+        {
+          "name": "соус",
+          "grams": 35,
+          "calories_kcal": 49,
+          "protein_g": 0.7,
+          "fat_g": 3.5,
+          "carbs_g": 3.1,
+          "confidence": 0.42
+        }
+      ],
+      "warnings": [
+        "Для части блюда использована приблизительная категория (fuzzy match)."
+      ],
+      "assumptions": [
+        "Расчет выполнен по значениям на 100 г из шага 1."
+      ]
+    }
+  },
+  "usage": {
+    "date": "2026-02-13",
+    "dailyLimit": 2,
+    "photosUsed": 2,
+    "remaining": 0,
+    "subscriptionStatus": "free"
+  }
+}
+```
+
+Response schema (authoritative)
+
+- Response shape MUST match existing `POST /v1/meals/analyze` response: `{ meal, usage }`.
+- `meal.result` MUST match `docs/spec/ai-contract.md` canonical nutrition schema.
+
+Validation rules (normative)
+
+- onboarding is required; otherwise `ONBOARDING_REQUIRED`
+- backend MUST verify `analysisSessionId` exists, is not expired, and belongs to authenticated user
+- every `items[].clientItemId` MUST exist in the referenced session snapshot
+- `items` MUST NOT contain duplicate `clientItemId`
+- payload validation errors return `VALIDATION_FAILED`
+
+Deterministic behavior (normative)
+
+- Quota is consumed at step2 finalize time only.
+- Backend MUST enforce daily quota (2 for free, 20 for active) before finalize transaction.
+- Step2 MUST compute item/totals deterministically from step1 persisted snapshot and submitted `weight_g`.
+- Source of truth for step2 nutrition MUST be local DB-resolved step1 snapshot (`nutritionPer100g` post-normalization), not raw AI text.
+- For `fuzzy|unknown` session items, backend MUST propagate warning text into `meal.result.warnings`.
+- Step2 MUST NOT perform new food lookup; calculations use only persisted step1 snapshot and step2 `weight_g` payload.
+- Step2 MUST NOT call external AI provider and MUST NOT re-resolve candidates against foods lookup.
+- Calculation formula per item (authoritative):
+  - `item_nutrient = round((nutrition_per_100g_nutrient * weight_g) / 100, 2)`
+  - where nutrient is `calories_kcal|protein_g|fat_g|carbs_g`
+- Totals MUST be computed as sum of step2 item nutrients and rounded to 2 decimals.
+- `meal.result.assumptions` MUST include RU note that calculation is based on step1 per-100g values.
+- Backend MUST store meal row and update daily stats atomically.
+- On successful finalize, session becomes non-replayable; repeated finalize with same `analysisSessionId` MUST return `IDEMPOTENCY_CONFLICT` unless request is served via Idempotency-Key replay cache.
+
+Errors
+
+- `UNAUTHORIZED`
+- `ONBOARDING_REQUIRED`
+- `NOT_FOUND` (session not found / not owned / expired)
+- `VALIDATION_FAILED`
+- `IDEMPOTENCY_CONFLICT`
+- `QUOTA_EXCEEDED`
+- `RATE_LIMITED` (technical anti-abuse throttle)
+- `INTERNAL_ERROR`
+
+Error envelope and mapping contract (authoritative)
+
+- Step1 and Step2 MUST return error body in canonical format from `docs/spec/errors.md`:
+
+```json
+{
+  "error": {
+    "code": "STRING_CODE",
+    "message": "Human readable message",
+    "details": {}
+  }
+}
+```
+
+- HTTP status mapping for Step1/Step2 MUST follow `docs/spec/errors.md` without endpoint-specific overrides.
+
+Step1/Step2 error examples (authoritative envelope)
+
+Example: `VALIDATION_FAILED` (step1 invalid payload)
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_FAILED",
+    "message": "Некорректные данные",
+    "details": {
+      "fieldErrors": [
+        {
+          "field": "items[0].weight_g",
+          "issue": "must be > 0"
+        }
+      ]
+    }
+  }
+}
+```
+
+Example: `NOT_FOUND` (step2 session not found / expired / not owned)
+
+```json
+{
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Не найдено",
+    "details": {
+      "resource": "analysis_session"
+    }
+  }
+}
+```
+
+Example: `QUOTA_EXCEEDED` (step2 finalize)
+
+```json
+{
+  "error": {
+    "code": "QUOTA_EXCEEDED",
+    "message": "Достигнут дневной лимит фото",
+    "details": {
+      "limit": 2,
+      "used": 2,
+      "status": "free"
+    }
+  }
+}
+```
+
+Example: `RATE_LIMITED` (step1/step2 anti-abuse)
+
+```json
+{
+  "error": {
+    "code": "RATE_LIMITED",
+    "message": "Слишком много запросов, попробуйте позже",
+    "details": {
+      "retryAfterSeconds": 60,
+      "windowSeconds": 60,
+      "scope": "analysis_step"
+    }
+  }
+}
+```
+
 5.2 GET /meals
 
 List meals (diary) with cursor pagination.
@@ -663,7 +1050,7 @@ Errors
 - `UNAUTHORIZED`
 - `VALIDATION_FAILED` (invalid `endDate`)
 
-6.2.1 Premium access contract (reports/analysis/charts)
+6.2.1 Premium access contract (reports/analysis/charts/notifications)
 
 Applies to these premium endpoints:
 
@@ -671,6 +1058,7 @@ Applies to these premium endpoints:
 - `GET /v1/reports/monthly`
 - `GET /v1/analysis/why-not-losing`
 - `GET /v1/charts/weight`
+- `PATCH /v1/notifications/settings`
 
 Premium access rule (normative)
 
@@ -694,6 +1082,7 @@ Feature id values (authoritative)
 - `reports.monthly` for `GET /v1/reports/monthly`
 - `analysis.why_not_losing` for `GET /v1/analysis/why-not-losing`
 - `charts.weight` for `GET /v1/charts/weight`
+- `notifications.settings` for `PATCH /v1/notifications/settings`
 
 6.2.2 GET /v1/reports/weekly
 
@@ -1595,6 +1984,7 @@ Access / gating (normative)
 
 - Endpoint path: `/v1/notifications/settings`
 - Requires valid Bearer token.
+- Requires active premium subscription (see 6.2.1).
 
 Request (JSON)
 

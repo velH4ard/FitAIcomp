@@ -2,10 +2,11 @@ import logging
 import sys
 import time
 import uuid
+import json
 from pathlib import Path
 from typing import Any, Optional
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, APIRouter, Depends, UploadFile, File, Header, Request
+from fastapi import FastAPI, APIRouter, Depends, UploadFile, File, Header, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from jsonschema import Draft202012Validator
@@ -23,7 +24,9 @@ from .schemas import (
     ProfileGoalUpdateRequest,
     ProfileGoalUpdateResponse,
     SubscriptionInfo,
-    UsageResponse
+    UsageResponse,
+    AnalysisStep1Response,
+    AnalysisStep2Request,
 )
 from .auth import verify_telegram_init_data, create_access_token
 from .deps import get_current_user
@@ -42,6 +45,15 @@ from .subscription import compute_upgrade_hint, get_effective_subscription_statu
 from .goals import calculate_daily_goal_auto, normalize_gender
 from .events import router as events_router, write_event_best_effort
 from .jitter import apply_post_ai_error
+from .structured_analysis import (
+    ensure_step1_ai_payload,
+    resolve_food_candidate,
+    reserve_daily_quota_for_step2,
+    build_step2_result_from_snapshot,
+    step1_session_expired,
+    emit_step_events,
+    normalize_food_text,
+)
 from .observability import (
     REQUEST_ID_HEADER,
     reset_request_context,
@@ -52,7 +64,7 @@ from .observability import (
     validate_request_id,
 )
 from datetime import datetime, timezone
-
+from datetime import timedelta
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -170,7 +182,96 @@ setup_error_handlers(app)
 # API Router
 v1_router = APIRouter(prefix="/v1")
 
-import json
+
+ANALYSIS_SESSION_CACHE: dict[str, dict[str, Any]] = {}
+ANALYSIS_STEP2_REPLAY_CACHE: dict[str, dict[str, Any]] = {}
+FOOD_FEEDBACK_RANK_CACHE: dict[tuple[str, str], dict[str, int]] = {}
+FOODS_FALLBACK_INDEX: list[dict[str, Any]] = [
+    {
+        "name": "плов",
+        "aliases": ["plov", "плов домашний", "рис с мясом"],
+        "nutrition_per_100g": {"calories_kcal": 180.0, "protein_g": 8.0, "fat_g": 6.0, "carbs_g": 22.0},
+    },
+    {
+        "name": "рис",
+        "aliases": ["rice", "рис отварной"],
+        "nutrition_per_100g": {"calories_kcal": 130.0, "protein_g": 2.7, "fat_g": 0.3, "carbs_g": 28.0},
+    },
+]
+
+
+def _cache_key_step2(user_id: str, idempotency_key: str) -> str:
+    return f"{user_id}:{idempotency_key}"
+
+
+def _resolve_feedback_name(user_id: str, raw_name: str) -> Optional[str]:
+    normalized = normalize_food_text(raw_name)
+    if len(normalized) < 2:
+        return None
+    bucket = FOOD_FEEDBACK_RANK_CACHE.get((str(user_id), normalized)) or {}
+    if not bucket:
+        return None
+    return sorted(bucket.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+
+
+def _record_feedback_name(user_id: str, raw_name: str, adjusted_name: str) -> None:
+    normalized = normalize_food_text(raw_name)
+    adjusted = normalize_food_text(adjusted_name)
+    if len(normalized) < 2 or len(adjusted) < 2:
+        return
+    key = (str(user_id), normalized)
+    bucket = FOOD_FEEDBACK_RANK_CACHE.setdefault(key, {})
+    bucket[adjusted] = int(bucket.get(adjusted, 0)) + 1
+
+
+def _fallback_food_candidates(q: str) -> list[dict[str, Any]]:
+    normalized_query = normalize_food_text(q)
+    compact_query = normalized_query.replace(" ", "")
+    items: list[dict[str, Any]] = []
+    for idx, item in enumerate(FOODS_FALLBACK_INDEX):
+        names = [item["name"], *item.get("aliases", [])]
+        score = 0
+        for n in names:
+            nn = normalize_food_text(n)
+            cn = nn.replace(" ", "")
+            if nn == normalized_query:
+                score = max(score, 100)
+            elif normalized_query and normalized_query in nn:
+                score = max(score, 80)
+            elif compact_query and compact_query in cn:
+                score = max(score, 70)
+            elif normalized_query and nn and len(normalized_query) >= 2:
+                # Simple character-overlap fuzzy match (trigram-like fallback)
+                common = sum(1 for c in normalized_query if c in nn)
+                ratio = common / max(len(normalized_query), len(nn))
+                if ratio >= 0.5:
+                    score = max(score, int(ratio * 70))
+        if score > 0:
+            items.append(
+                {
+                    "id": str(idx + 1),
+                    "name": item["name"],
+                    "matchType": "exact" if score >= 100 else "fuzzy",
+                    "matchScore": round(score / 100.0, 2),
+                    "nutritionPer100g": item["nutrition_per_100g"],
+                }
+            )
+    return sorted(items, key=lambda i: (-i["matchScore"], i["name"]))[:20]
+
+
+def _to_plain_nutrition(value: Any) -> dict[str, float]:
+    if hasattr(value, "model_dump"):
+        raw = value.model_dump()
+    elif isinstance(value, dict):
+        raw = value
+    else:
+        raw = {}
+    return {
+        "calories_kcal": float(raw.get("calories_kcal") or 0),
+        "protein_g": float(raw.get("protein_g") or 0),
+        "fat_g": float(raw.get("fat_g") or 0),
+        "carbs_g": float(raw.get("carbs_g") or 0),
+    }
 
 ALLOWED_IMAGE_CONTENT_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
 DESCRIPTION_MAX_LEN = 500
@@ -520,17 +621,18 @@ async def analyze_meal(
             details={"stage": "idempotency_replay_shape"},
         )
 
-    actual_file = image
+    actual_file: Any = image
     if actual_file is None:
         try:
             form = await request.form()
+            legacy_file = form.get("file")
         except Exception:
             form = None
-        legacy_file = form.get("file") if form is not None else None
-        if legacy_file is not None and hasattr(legacy_file, "read") and hasattr(legacy_file, "content_type"):
+            legacy_file = None
+        if hasattr(legacy_file, "read"):
             actual_file = legacy_file
 
-    if actual_file is None:
+    if actual_file is None or not hasattr(actual_file, "read"):
         raise FitAIError(
             code="VALIDATION_FAILED",
             message="Некорректные данные",
@@ -1023,6 +1125,602 @@ async def analyze_meal(
         )
         logger.error("Error in analyze_meal", exc_info=True)
         raise FitAIError(code="INTERNAL_ERROR", message="Внутренняя ошибка сервера", status_code=500)
+
+
+@v1_router.get("/foods/search", tags=["Meals"])
+async def foods_search(
+    q: str = Query(..., min_length=1, max_length=120),
+    user=Depends(get_current_user),
+    conn=Depends(get_db),
+):
+    normalized_q = normalize_food_text(q)
+    if len(normalized_q) < 2:
+        return {"items": []}
+
+    items: list[dict[str, Any]] = []
+    compact_q = normalized_q.replace(" ", "")
+    try:
+        rows = await conn.fetch(
+            """
+            WITH exact_name AS (
+                SELECT id, name, calories_per_100g, protein_per_100g, fat_per_100g, carbs_per_100g, 1.0::double precision AS score, 'exact'::text AS mtype
+                FROM foods
+                WHERE normalized_name = $1
+                LIMIT 5
+            ),
+            exact_alias AS (
+                SELECT id, name, calories_per_100g, protein_per_100g, fat_per_100g, carbs_per_100g, 0.88::double precision AS score, 'exact'::text AS mtype
+                FROM foods
+                WHERE normalized_aliases @> ARRAY[$1::text]
+                   OR compact_aliases @> ARRAY[$2::text]
+                LIMIT 10
+            ),
+            fuzzy AS (
+                SELECT id, name, calories_per_100g, protein_per_100g, fat_per_100g, carbs_per_100g,
+                       GREATEST(similarity(normalized_name, $1), similarity(alias_search_text, $1), similarity(compact_alias_search_text, $2)) AS score,
+                       'fuzzy'::text AS mtype
+                FROM foods
+                WHERE (
+                    normalized_name % $1
+                    OR alias_search_text % $1
+                    OR compact_alias_search_text % $2
+                )
+                LIMIT 30
+            ),
+            ilike_fb AS (
+                SELECT id, name, calories_per_100g, protein_per_100g, fat_per_100g, carbs_per_100g, 0.40::double precision AS score, 'fuzzy'::text AS mtype
+                FROM foods
+                WHERE normalized_name ILIKE ('%' || $1 || '%')
+                   OR alias_search_text ILIKE ('%' || $1 || '%')
+                   OR compact_alias_search_text ILIKE ('%' || $2 || '%')
+                LIMIT 20
+            ),
+            unioned AS (
+                SELECT * FROM exact_name
+                UNION ALL
+                SELECT * FROM exact_alias
+                UNION ALL
+                SELECT * FROM fuzzy WHERE score >= 0.35
+                UNION ALL
+                SELECT * FROM ilike_fb
+            )
+            SELECT DISTINCT ON (name)
+                id,
+                name,
+                calories_per_100g,
+                protein_per_100g,
+                fat_per_100g,
+                carbs_per_100g,
+                score,
+                mtype
+            FROM unioned
+            ORDER BY name, score DESC
+            LIMIT 20
+            """,
+            normalized_q,
+            compact_q,
+        )
+
+        for row in rows:
+            rd = dict(row)
+            items.append(
+                {
+                    "id": str(rd.get("id")),
+                    "name": rd.get("name"),
+                    "matchType": rd.get("mtype") or "fuzzy",
+                    "matchScore": round(float(rd.get("score") or 0), 2),
+                    "nutritionPer100g": {
+                        "calories_kcal": float(rd.get("calories_per_100g") or 0),
+                        "protein_g": float(rd.get("protein_per_100g") or 0),
+                        "fat_g": float(rd.get("fat_per_100g") or 0),
+                        "carbs_g": float(rd.get("carbs_per_100g") or 0),
+                    },
+                }
+            )
+    except Exception:
+        items = _fallback_food_candidates(q)
+
+    if not items:
+        items = _fallback_food_candidates(q)
+    return {"items": items}
+
+
+@v1_router.post("/meals/analysis-step1", response_model=AnalysisStep1Response, tags=["Meals"])
+async def analysis_step1(
+    request: Request,
+    image: Optional[UploadFile] = File(None),
+    user=Depends(get_current_user),
+    conn=Depends(get_db),
+):
+    if not user["is_onboarded"]:
+        raise FitAIError(
+            code="ONBOARDING_REQUIRED",
+            message="Заполните анкету перед использованием",
+            status_code=409,
+        )
+
+    actual_file: Optional[UploadFile] = image
+    if actual_file is None:
+        raise FitAIError(
+            code="VALIDATION_FAILED",
+            message="Некорректные данные",
+            status_code=400,
+            details={"fieldErrors": [{"field": "image", "issue": "Field required"}]},
+        )
+
+    content_type = (actual_file.content_type or "").lower()
+    if content_type not in ALLOWED_IMAGE_CONTENT_TYPES:
+        raise FitAIError(
+            code="VALIDATION_FAILED",
+            message="Некорректные данные",
+            status_code=400,
+            details={"fieldErrors": [{"field": "image", "issue": "Only jpg/png/webp are allowed"}]},
+        )
+
+    image_bytes = await actual_file.read(settings.MEALS_ANALYZE_MAX_IMAGE_BYTES + 1)
+    if not image_bytes:
+        raise FitAIError(
+            code="VALIDATION_FAILED",
+            message="Некорректные данные",
+            status_code=400,
+            details={"fieldErrors": [{"field": "image", "issue": "File must not be empty"}]},
+        )
+    if len(image_bytes) > settings.MEALS_ANALYZE_MAX_IMAGE_BYTES:
+        raise FitAIError(
+            code="PAYLOAD_TOO_LARGE",
+            message="Файл слишком большой",
+            status_code=413,
+            details={
+                "maxBytes": settings.MEALS_ANALYZE_MAX_IMAGE_BYTES,
+                "receivedBytes": len(image_bytes),
+            },
+        )
+
+    await _enforce_analyze_rate_limit(conn, str(user["id"]))
+
+    description = await _parse_optional_description_from_multipart(request)
+    ai_payload = await openrouter_client.classify_step1_items(
+        image_bytes=image_bytes,
+        content_type=content_type,
+        description=description,
+    )
+    validated = ensure_step1_ai_payload(json.dumps(ai_payload.model_dump(), ensure_ascii=False))
+
+    ai_items = validated.get("items", []) if isinstance(validated, dict) else []
+    response_items: list[dict[str, Any]] = []
+    snapshot_items: list[dict[str, Any]] = []
+
+    for idx, item in enumerate(ai_items, start=1):
+        source_name = str(item.get("name") or "").strip()
+        preferred = _resolve_feedback_name(str(user["id"]), source_name) or source_name
+        resolved = await resolve_food_candidate(
+            conn,
+            name=preferred,
+            ai_match_type=str(item.get("match_type") or "unknown"),
+            ai_confidence=item.get("confidence"),
+            ai_nutrition=_to_plain_nutrition(item.get("nutrition_per_100g") or {}),
+            ai_default_weight=item.get("default_weight_g"),
+            ai_warnings=list(item.get("warnings") or []),
+        )
+
+        client_item_id = f"item_{idx}"
+        response_items.append(
+            {
+                "clientItemId": client_item_id,
+                "name": resolved["name"],
+                "matchType": resolved["match_type"],
+                "confidence": resolved["confidence"],
+                "nutritionPer100g": resolved["nutrition_per_100g"],
+                "defaultWeightG": resolved["default_weight_g"],
+                "warnings": resolved["warnings"],
+            }
+        )
+        snapshot_items.append(
+            {
+                "client_item_id": client_item_id,
+                "name": resolved["name"],
+                "match_type": resolved["match_type"],
+                "confidence": resolved["confidence"],
+                "nutrition_per_100g": resolved["nutrition_per_100g"],
+                "default_weight_g": resolved["default_weight_g"],
+                "warnings": resolved["warnings"],
+                "metadata": resolved.get("metadata") or {},
+                "original_name": source_name,
+            }
+        )
+
+    recognized = bool(validated.get("recognized", False)) and bool(response_items)
+    if not recognized:
+        response_items = []
+        snapshot_items = []
+
+    overall_confidence = 0.0
+    if recognized and response_items:
+        overall_confidence = round(
+            sum(float(i["confidence"]) for i in response_items) / max(1, len(response_items)),
+            2,
+        )
+    else:
+        overall_confidence = min(0.2, float(validated.get("overall_confidence") or 0.15))
+
+    top_warnings = [str(w).strip() for w in list(validated.get("warnings") or []) if str(w).strip()]
+    if not recognized and not top_warnings:
+        top_warnings = ["Не удалось распознать еду: изображение слишком размыто/темно."]
+
+    session_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(minutes=15)
+    image_path = f"analysis-step1/{user['id']}/{now.date().isoformat()}/{session_id}.bin"
+    ANALYSIS_SESSION_CACHE[session_id] = {
+        "id": session_id,
+        "user_id": str(user["id"]),
+        "recognized": bool(recognized),
+        "overall_confidence": float(overall_confidence),
+        "items": snapshot_items,
+        "warnings": top_warnings[:8],
+        "image_path": image_path,
+        "created_at": now,
+        "expires_at": expires_at,
+        "consumed": False,
+    }
+
+    try:
+        await conn.execute(
+            """
+            INSERT INTO meal_analysis_sessions (id, user_id, recognized, overall_confidence, image_path, ai_model, created_at, expires_at)
+            VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            session_id,
+            str(user["id"]),
+            bool(recognized),
+            float(overall_confidence),
+            image_path,
+            settings.OPENROUTER_MODEL,
+            now,
+            expires_at,
+        )
+        for item in snapshot_items:
+            await conn.execute(
+                """
+                INSERT INTO meal_analysis_session_items (
+                    session_id, client_item_id, name, match_type, confidence,
+                    nutrition_per_100g, default_weight_g, warnings, metadata
+                ) VALUES ($1::uuid, $2, $3, $4, $5, $6::jsonb, $7, $8::text[], $9::jsonb)
+                ON CONFLICT (session_id, client_item_id) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    match_type = EXCLUDED.match_type,
+                    confidence = EXCLUDED.confidence,
+                    nutrition_per_100g = EXCLUDED.nutrition_per_100g,
+                    default_weight_g = EXCLUDED.default_weight_g,
+                    warnings = EXCLUDED.warnings,
+                    metadata = EXCLUDED.metadata
+                """,
+                session_id,
+                item["client_item_id"],
+                item["name"],
+                item["match_type"],
+                float(item["confidence"]),
+                json.dumps(item["nutrition_per_100g"], ensure_ascii=False),
+                item["default_weight_g"],
+                item["warnings"],
+                json.dumps(item.get("metadata") or {}, ensure_ascii=False),
+            )
+    except Exception:
+        pass
+
+    await emit_step_events(
+        conn,
+        user_id=str(user["id"]),
+        ok=True,
+        step="step1",
+        details={"recognized": bool(recognized), "itemsCount": len(response_items)},
+    )
+
+    return {
+        "analysisSessionId": session_id,
+        "recognized": bool(recognized),
+        "overallConfidence": round(float(overall_confidence), 2),
+        "items": response_items,
+        "warnings": top_warnings[:8],
+        "expiresAt": expires_at,
+    }
+
+
+async def _load_session_from_db(conn, session_id: str) -> Optional[dict[str, Any]]:
+    """Load analysis session from DB when in-memory cache is empty (e.g. after restart)."""
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT id, user_id, recognized, overall_confidence, image_path,
+                   ai_model, created_at, expires_at, consumed_at
+            FROM meal_analysis_sessions
+            WHERE id = $1::uuid
+            """,
+            session_id,
+        )
+        if row is None:
+            return None
+
+        items_rows = await conn.fetch(
+            """
+            SELECT client_item_id, name, match_type, confidence,
+                   nutrition_per_100g, default_weight_g, warnings, metadata
+            FROM meal_analysis_session_items
+            WHERE session_id = $1::uuid
+            ORDER BY client_item_id
+            """,
+            session_id,
+        )
+
+        snapshot_items = []
+        for item_row in items_rows:
+            nutrition = item_row["nutrition_per_100g"]
+            if isinstance(nutrition, str):
+                nutrition = json.loads(nutrition)
+            metadata = item_row["metadata"]
+            if isinstance(metadata, str):
+                metadata = json.loads(metadata)
+            warnings = list(item_row["warnings"]) if item_row["warnings"] else []
+            snapshot_items.append({
+                "client_item_id": str(item_row["client_item_id"]),
+                "name": str(item_row["name"]),
+                "match_type": str(item_row["match_type"]),
+                "confidence": float(item_row["confidence"]),
+                "nutrition_per_100g": nutrition,
+                "default_weight_g": float(item_row["default_weight_g"]) if item_row["default_weight_g"] is not None else None,
+                "warnings": warnings,
+                "metadata": metadata or {},
+                "original_name": str(item_row["name"]),
+            })
+
+        created_at = row["created_at"]
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        expires_at = row["expires_at"]
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+        return {
+            "id": str(row["id"]),
+            "user_id": str(row["user_id"]),
+            "recognized": bool(row["recognized"]),
+            "overall_confidence": float(row["overall_confidence"] or 0),
+            "items": snapshot_items,
+            "warnings": [],
+            "image_path": str(row["image_path"] or ""),
+            "created_at": created_at,
+            "expires_at": expires_at or (created_at + timedelta(minutes=15)),
+            "consumed": row["consumed_at"] is not None,
+        }
+    except Exception:
+        logger.warning("Failed to load session from DB session_id=%s", session_id)
+        return None
+
+
+@v1_router.post("/meals/analysis-step2", tags=["Meals"])
+async def analysis_step2(
+    payload: AnalysisStep2Request,
+    request: Request,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    user=Depends(get_current_user),
+    conn=Depends(get_db),
+):
+    if not user["is_onboarded"]:
+        raise FitAIError(
+            code="ONBOARDING_REQUIRED",
+            message="Заполните анкету перед использованием",
+            status_code=409,
+        )
+
+    if idempotency_key:
+        replay = ANALYSIS_STEP2_REPLAY_CACHE.get(_cache_key_step2(str(user["id"]), idempotency_key))
+        if replay is not None:
+            return replay
+
+    await _enforce_analyze_rate_limit(conn, str(user["id"]))
+
+    session_id = str(payload.analysisSessionId)
+    session = ANALYSIS_SESSION_CACHE.get(session_id)
+
+    if session is None:
+        session = await _load_session_from_db(conn, session_id)
+        if session is not None:
+            ANALYSIS_SESSION_CACHE[session_id] = session
+
+    if session is None:
+        raise FitAIError(
+            code="NOT_FOUND",
+            message="Не найдено",
+            status_code=404,
+            details={"resource": "analysis_session"},
+        )
+
+    if str(session.get("user_id")) != str(user["id"]):
+        raise FitAIError(
+            code="NOT_FOUND",
+            message="Не найдено",
+            status_code=404,
+            details={"resource": "analysis_session"},
+        )
+
+    if step1_session_expired(session["created_at"]) or datetime.now(timezone.utc) > session["expires_at"]:
+        raise FitAIError(
+            code="NOT_FOUND",
+            message="Не найдено",
+            status_code=404,
+            details={"resource": "analysis_session"},
+        )
+
+    if session.get("consumed"):
+        raise FitAIError(
+            code="IDEMPOTENCY_CONFLICT",
+            message="Запрос с таким ключом уже обрабатывается или завершился ошибкой",
+            status_code=409,
+        )
+
+    requested_weights: dict[str, float] = {}
+    requested_adjusted_names: dict[str, str] = {}
+    seen_ids: set[str] = set()
+    for req_item in payload.items:
+        client_item_id = str(req_item.clientItemId)
+        if client_item_id in seen_ids:
+            raise FitAIError(
+                code="VALIDATION_FAILED",
+                message="Некорректные данные",
+                status_code=400,
+                details={"fieldErrors": [{"field": "items", "issue": "duplicate clientItemId"}]},
+            )
+        seen_ids.add(client_item_id)
+        requested_weights[client_item_id] = float(req_item.weight_g)
+        if req_item.adjustedName is not None and req_item.adjustedName.strip():
+            requested_adjusted_names[client_item_id] = req_item.adjustedName.strip()
+
+    snapshot_items = list(session.get("items") or [])
+    snapshot_ids = {str(i.get("client_item_id")) for i in snapshot_items}
+    for item_id in seen_ids:
+        if item_id not in snapshot_ids:
+            raise FitAIError(
+                code="VALIDATION_FAILED",
+                message="Некорректные данные",
+                status_code=400,
+                details={"fieldErrors": [{"field": "items", "issue": "unknown clientItemId"}]},
+            )
+
+    for snap in snapshot_items:
+        cid = str(snap.get("client_item_id"))
+        adjusted_name = requested_adjusted_names.get(cid)
+        if adjusted_name:
+            _record_feedback_name(str(user["id"]), str(snap.get("original_name") or snap.get("name") or ""), adjusted_name)
+            snap["name"] = adjusted_name
+
+    quota = await reserve_daily_quota_for_step2(conn, user=user, today=datetime.now(timezone.utc).date())
+
+    result_payload = build_step2_result_from_snapshot(
+        snapshot_items=snapshot_items,
+        requested_weights=requested_weights,
+        overall_confidence=float(session.get("overall_confidence") or 0),
+    )
+
+    meal_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    meal_response = {
+        "id": meal_id,
+        "createdAt": now.isoformat().replace("+00:00", "Z"),
+        "mealTime": payload.mealTime,
+        "imageUrl": str(session.get("image_path") or f"analysis-step1/{user['id']}/{session_id}.bin"),
+        "ai": {
+            "provider": "openrouter",
+            "model": settings.OPENROUTER_MODEL,
+            "confidence": float(session.get("overall_confidence") or 0),
+        },
+        "result": result_payload,
+    }
+
+    response_payload = {
+        "meal": meal_response,
+        "usage": {
+            "date": datetime.now(timezone.utc).date().isoformat(),
+            "dailyLimit": int(quota["daily_limit"]),
+            "photosUsed": int(quota["photos_used"]),
+            "remaining": max(0, int(quota["daily_limit"]) - int(quota["photos_used"])),
+            "subscriptionStatus": quota["status"],
+        },
+    }
+
+    session["consumed"] = True
+    session["consumed_at"] = now
+
+    try:
+        await conn.execute(
+            """
+            UPDATE meal_analysis_sessions
+            SET consumed_at = NOW()
+            WHERE id = $1::uuid
+            """,
+            session_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO meals (
+                id, user_id, created_at, meal_time, image_path, ai_provider, ai_model, ai_confidence, result_json, analyze_request_id
+            ) VALUES (
+                $1::uuid, $2::uuid, $3, $4, $5, 'openrouter', $6, $7, $8::jsonb, $9::uuid
+            )
+            ON CONFLICT (analyze_request_id) DO NOTHING
+            """,
+            meal_id,
+            str(user["id"]),
+            now,
+            payload.mealTime,
+            meal_response["imageUrl"],
+            settings.OPENROUTER_MODEL,
+            float(session.get("overall_confidence") or 0),
+            json.dumps(result_payload, ensure_ascii=False),
+            meal_id,
+        )
+        today = now.date()
+        totals = result_payload.get("totals", {})
+        await conn.execute(
+            """
+            INSERT INTO daily_stats (
+                user_id,
+                date,
+                calories_kcal,
+                protein_g,
+                fat_g,
+                carbs_g,
+                meals_count,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, 1, NOW())
+            ON CONFLICT (user_id, date)
+            DO UPDATE SET
+                calories_kcal = daily_stats.calories_kcal + EXCLUDED.calories_kcal,
+                protein_g = daily_stats.protein_g + EXCLUDED.protein_g,
+                fat_g = daily_stats.fat_g + EXCLUDED.fat_g,
+                carbs_g = daily_stats.carbs_g + EXCLUDED.carbs_g,
+                meals_count = daily_stats.meals_count + 1,
+                updated_at = NOW()
+            """,
+            user["id"],
+            today,
+            float(totals.get("calories_kcal") or 0),
+            float(totals.get("protein_g") or 0),
+            float(totals.get("fat_g") or 0),
+            float(totals.get("carbs_g") or 0),
+        )
+        for snap in snapshot_items:
+            cid = str(snap.get("client_item_id"))
+            adjusted_name = requested_adjusted_names.get(cid)
+            if adjusted_name:
+                try:
+                    await conn.execute(
+                        """
+                        INSERT INTO food_match_feedback (
+                            user_id, original_name, adjusted_name, created_at
+                        ) VALUES ($1::uuid, $2, $3, NOW())
+                        """,
+                        str(user["id"]),
+                        str(snap.get("original_name") or snap.get("name") or ""),
+                        adjusted_name,
+                    )
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    if idempotency_key:
+        ANALYSIS_STEP2_REPLAY_CACHE[_cache_key_step2(str(user["id"]), idempotency_key)] = response_payload
+
+    await emit_step_events(
+        conn,
+        user_id=str(user["id"]),
+        ok=True,
+        step="step2",
+        details={"sessionId": session_id, "mealId": meal_id, "itemsCount": len(snapshot_items)},
+    )
+    return response_payload
 
 
 @app.get("/health", tags=["Health"])

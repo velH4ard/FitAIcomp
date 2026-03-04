@@ -246,3 +246,108 @@ Backend SHOULD:
 round numeric fields to 2 decimals for macros
 
 clamp negative values to 0 only if schema parse succeeded but values are weird (better: reject and retry once)
+
+---
+
+## 7. Step 1 classifier contract (`POST /v1/meals/analysis-step1`)
+
+This section defines the AI output contract used only for Step 1 candidate detection.
+
+Scope:
+- Used by backend internally before building API response for `POST /v1/meals/analysis-step1`
+- MUST NOT replace or alter the canonical nutrition contract in section 3
+- Step 2 (`POST /v1/meals/analysis-step2`) still returns canonical `meal.result` from section 3
+
+### 7.1 Required AI output JSON shape
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fitai.app/schemas/food-classifier-step1.schema.json",
+  "title": "FitAI Food Classifier Step1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["recognized", "overall_confidence", "items", "warnings"],
+  "properties": {
+    "recognized": { "type": "boolean" },
+    "overall_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "items": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "match_type", "confidence", "nutrition_per_100g", "default_weight_g", "warnings"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "match_type": { "type": "string", "enum": ["exact", "fuzzy", "unknown"] },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "nutrition_per_100g": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["calories_kcal", "protein_g", "fat_g", "carbs_g"],
+            "properties": {
+              "calories_kcal": { "type": "number", "minimum": 0 },
+              "protein_g": { "type": "number", "minimum": 0 },
+              "fat_g": { "type": "number", "minimum": 0 },
+              "carbs_g": { "type": "number", "minimum": 0 }
+            }
+          },
+          "default_weight_g": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+          "warnings": {
+            "type": "array",
+            "maxItems": 5,
+            "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "maxItems": 8,
+      "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+    }
+  }
+}
+```
+
+### 7.2 Step 1 deterministic AI rules
+
+- If food is not identifiable:
+  - `recognized = false`
+  - `overall_confidence <= 0.2`
+  - `items = []`
+  - include RU explanation in `warnings`
+- For `match_type = fuzzy`, item-level `warnings` MUST contain RU note about approximate match.
+- For `match_type = unknown`, item-level `warnings` MUST contain RU note that nutrition is approximate.
+- Confidence output MUST follow resolver stage ranges (internal AI proposal before backend normalization):
+  - exact name intent: `0.90..1.00`
+  - exact alias intent: `0.75..0.89`
+  - fuzzy intent (`similarity >= 0.35`): `0.35..0.74`
+  - ILIKE fallback intent: `0.35..0.55` (later mapped by backend as `match_type = fuzzy`)
+  - unknown intent: `0.00..0.34`
+- If `recognized = true` and `items` is non-empty, recommended `overall_confidence` is arithmetic mean of item confidences rounded to 2 decimals.
+- AI output is internal; backend maps snake_case fields to API camelCase fields defined in `docs/spec/api.md`.
+
+### 7.3 Step 1 backend normalization / lookup intent (authoritative)
+
+- This Step 1 schema is the **internal AI contract** only.
+- Backend MAY normalize or override AI-proposed `match_type`, `nutrition_per_100g`, `default_weight_g`, and `warnings` using deterministic food-reference lookup before returning API response.
+- Backend normalization MUST use local RU foods lookup and strict deterministic matching priority:
+  1. exact name
+  2. exact alias
+  3. fuzzy (`similarity >= 0.35`)
+  4. ILIKE fallback
+- Public API response for `POST /v1/meals/analysis-step1` MUST follow `docs/spec/api.md` (`matchType`, `nutritionPer100g`, `defaultWeightG`) and remain deterministic for the same persisted step1 snapshot.
+- If a matched `state` record has missing/partial exact nutrition, backend MUST fallback to matched `base_name` nutrition and append RU warning.
+- If `base_name` nutrition is also unavailable, backend MUST set `match_type = unknown`, fill deterministic conservative fallback nutrition, and append RU warning.
+- If reference lookup returns partial nutrition data, backend MUST fill missing fields with deterministic conservative fallback values and append RU warning.
+- Step2 calculations MUST use persisted step1 snapshot values (post-normalization), not raw AI text.
+
+### 7.4 Step 2 deterministic calculation contract linkage
+
+- `POST /v1/meals/analysis-step2` MUST NOT call external AI provider.
+- Step2 MUST compute nutrients only from persisted step1 snapshot values (`nutrition_per_100g` post-normalization in local DB) and submitted `weight_g`.
+- Formula per nutrient is authoritative: `round((nutrition_per_100g_nutrient * weight_g) / 100, 2)`.
+- Totals MUST be sum of item nutrients rounded to 2 decimals.
+- Any warnings generated by step1 fallback (`fuzzy|unknown|base_name fallback`) MUST be propagated into final `meal.result.warnings`.

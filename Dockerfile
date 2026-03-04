@@ -22,6 +22,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Copy application code
 COPY backend/app ./app
 COPY docs/spec ./docs/spec
+COPY forfoods ./forfoods
+COPY backend/scripts ./backend/scripts
 
 # Set ownership
 RUN chown -R appuser:appuser /app

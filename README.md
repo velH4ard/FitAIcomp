@@ -400,6 +400,14 @@ cd ..
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
+4.1) Load foods reference database (run once after first deploy, or after updating the foods file):
+
+```bash
+docker compose exec backend python -m scripts.load_foods
+```
+
+This parses `forfoods/ru_rf_min_2060_items_aliases_v2.json` (2060 RU food items) and upserts them into the `foods` table. Safe to re-run — uses `ON CONFLICT DO UPDATE`.
+
 5) Configure HTTPS (Let's Encrypt): issue certs for your domain with Certbot and keep `POST /v1/subscription/yookassa/webhook` reachable unchanged.
 Use single-origin nginx routing: `/` -> frontend static, `/v1` (and `/health`) -> backend API (see `infra/nginx/fitai.conf`).
 Telegram WebApp requires HTTPS domain.

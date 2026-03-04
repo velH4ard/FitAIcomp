@@ -182,7 +182,7 @@ export function renderQuoteOverlay(text, onDismiss) {
 
   const action = document.createElement("button");
   action.type = "button";
-  action.className = "btn btn-primary w-full rounded-xl font-semibold";
+  action.className = "btn-primary-organic";
   action.textContent = "Понял(а)";
 
   const dismiss = () => {
@@ -215,19 +215,20 @@ export function renderQuoteOverlay(text, onDismiss) {
   return overlay;
 }
 
+/** Compact stat block (value + label, for macro grids) */
 function statBlock(title, value) {
   const card = document.createElement("div");
-  card.className = "rounded-xl border border-slate-100 bg-slate-50 p-3 text-center";
+  card.className = "stat-block";
 
   const titleEl = document.createElement("div");
-  titleEl.className = "text-xs text-slate-500";
+  titleEl.className = "stat-block-label";
   titleEl.textContent = title;
 
   const valueEl = document.createElement("div");
-  valueEl.className = "mt-1 text-sm font-medium text-slate-700";
+  valueEl.className = "stat-block-value";
   valueEl.textContent = value;
 
-  card.append(titleEl, valueEl);
+  card.append(valueEl, titleEl);
   return card;
 }
 
@@ -320,23 +321,23 @@ function mealTimeLabel(value) {
 
 export function createRoot() {
   const root = document.createElement("div");
-  root.className = "flex flex-col gap-6 pb-8";
+  root.className = "page-root";
   return root;
 }
 
 export function createTitle(text, subtitle = "") {
   const wrap = document.createElement("div");
-  wrap.className = "mb-1";
 
   const title = document.createElement("h1");
-  title.className = "text-xl font-semibold tracking-tight text-slate-900";
+  title.className = "title-serif";
+  title.style.fontSize = "1.5rem";
   title.textContent = text;
 
   wrap.append(title);
 
   if (subtitle) {
     const sub = document.createElement("p");
-    sub.className = "mt-1 text-sm text-slate-600";
+    sub.style.cssText = "margin-top:0.25rem;font-size:0.875rem;color:var(--bark);opacity:0.5;";
     sub.textContent = subtitle;
     wrap.append(sub);
   }
@@ -344,7 +345,7 @@ export function createTitle(text, subtitle = "") {
   return wrap;
 }
 
-function createLucideIcon(name, className = "h-4 w-4") {
+function createLucideIcon(name, style = "width:1rem;height:1rem;") {
   const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   icon.setAttribute("viewBox", "0 0 24 24");
   icon.setAttribute("fill", "none");
@@ -353,7 +354,7 @@ function createLucideIcon(name, className = "h-4 w-4") {
   icon.setAttribute("stroke-linecap", "round");
   icon.setAttribute("stroke-linejoin", "round");
   icon.setAttribute("aria-hidden", "true");
-  icon.setAttribute("class", className);
+  icon.style.cssText = style;
 
   const paths = {
     camera: [
@@ -404,16 +405,16 @@ function createButton(text, onClick, className, options = {}) {
   } = options;
   const button = document.createElement("button");
   button.type = "button";
-  button.className = `${className} transition-all duration-150 ease-in-out`;
+  button.className = className;
   button.disabled = disabled || loading;
 
   if (icon) {
-    button.append(createLucideIcon(icon));
+    button.append(createLucideIcon(icon, "width:1rem;height:1rem;"));
   }
 
   if (loading) {
     const spinner = document.createElement("span");
-    spinner.className = "loading loading-spinner loading-sm";
+    spinner.className = "btn-spinner";
     spinner.setAttribute("aria-hidden", "true");
     button.append(spinner);
   }
@@ -427,19 +428,19 @@ function createButton(text, onClick, className, options = {}) {
 }
 
 export function createPrimaryButton(text, onClick, options = {}) {
-  return createButton(text, onClick, "btn btn-primary w-full rounded-xl font-semibold", options);
+  return createButton(text, onClick, "btn-primary-organic", options);
 }
 
 export function createSecondaryButton(text, onClick, options = {}) {
-  return createButton(text, onClick, "btn btn-outline border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 w-full rounded-xl font-semibold", options);
+  return createButton(text, onClick, "btn-secondary-organic", options);
 }
 
 export function createIconButton({ icon, onClick, ariaLabel }) {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white/90 text-slate-700 shadow-sm transition-all duration-150 hover:border-slate-300 hover:bg-white";
+  button.className = "btn-back";
   button.setAttribute("aria-label", ariaLabel);
-  button.append(createLucideIcon(icon, "h-5 w-5"));
+  button.append(createLucideIcon(icon, "width:1.25rem;height:1.25rem;"));
   button.addEventListener("click", onClick);
   return button;
 }
@@ -455,24 +456,25 @@ export function createHeaderShell({ title = "", subtitle = "", left = null, righ
   }
 
   const center = document.createElement("div");
-  center.className = "min-w-0 text-center";
+  center.style.cssText = "min-width: 0; text-align: center;";
 
   if (title) {
     const titleEl = document.createElement("h1");
-    titleEl.className = "truncate text-base font-semibold tracking-tight text-slate-900";
+    titleEl.className = "app-header-title";
     titleEl.textContent = title;
     center.append(titleEl);
   }
 
   if (subtitle) {
     const subtitleEl = document.createElement("p");
-    subtitleEl.className = "truncate text-xs text-slate-500";
+    subtitleEl.className = "app-header-subtitle";
     subtitleEl.textContent = subtitle;
     center.append(subtitleEl);
   }
 
   const rightSlot = document.createElement("div");
-  rightSlot.className = "app-header-slot justify-end";
+  rightSlot.className = "app-header-slot";
+  rightSlot.style.justifyContent = "flex-end";
   if (right) {
     rightSlot.append(right);
   }
@@ -484,9 +486,9 @@ export function createHeaderShell({ title = "", subtitle = "", left = null, righ
 export function createHeaderBackButton(onClick) {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "inline-flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-700 transition hover:bg-slate-200 active:scale-95";
+  button.className = "btn-back";
   button.setAttribute("aria-label", "Назад");
-  button.append(createLucideIcon("arrow-left", "h-5 w-5"));
+  button.append(createLucideIcon("arrow-left", "width:1.25rem;height:1.25rem;"));
   button.addEventListener("click", onClick);
   return button;
 }
@@ -497,7 +499,7 @@ export function createProgressBar({ value = 0, max = 100, label = "Прогре�
   const percent = (safeValue / safeMax) * 100;
 
   const track = document.createElement("div");
-  track.className = "progress-track mt-3";
+  track.className = "progress-track";
   track.setAttribute("role", "progressbar");
   track.setAttribute("aria-label", label);
   track.setAttribute("aria-valuemin", "0");
@@ -514,23 +516,29 @@ export function createProgressBar({ value = 0, max = 100, label = "Прогре�
 
 export function createQuotaLabel(usage) {
   const label = document.createElement("div");
-  label.className = "rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700";
+  label.className = "quota-label";
+
+  const dot = document.createElement("span");
+  dot.className = "quota-dot";
 
   const remaining = usage?.remaining ?? usage?.remainingToday ?? 0;
   const limit = usage?.dailyLimit ?? 0;
-  label.textContent = `Осталось ${remaining} из ${limit} фото сегодня`;
 
+  const text = document.createElement("span");
+  text.textContent = `Осталось ${remaining} из ${limit} фото сегодня`;
+
+  label.append(dot, text);
   return label;
 }
 
 export function createSubscriptionHint(subscription) {
   const wrap = document.createElement("div");
-  wrap.className = "text-sm text-slate-600";
+  wrap.className = "subscription-hint";
 
   if (subscription?.status === "active") {
     wrap.textContent = `Премиум активен до ${formatDate(subscription.activeUntil)}`;
   } else {
-    wrap.textContent = "Бесплатный тариф: 2 фото в день";
+    wrap.textContent = "Бесплатный тариф · 2 фото в день";
   }
 
   return wrap;
@@ -548,7 +556,7 @@ export function createPremiumGateCard(options = {}) {
 
   const badge = document.createElement("p");
   badge.className = "premium-gate-badge";
-  badge.textContent = "Premium";
+  badge.textContent = "✦ Premium";
 
   const title = document.createElement("h3");
   title.className = "premium-gate-title";
@@ -559,7 +567,7 @@ export function createPremiumGateCard(options = {}) {
 
   const oldPrice = document.createElement("span");
   oldPrice.className = "premium-gate-price-old";
-  oldPrice.textContent = "1499 ₽";
+  oldPrice.textContent = "1 499 ₽";
 
   const currentPrice = document.createElement("span");
   currentPrice.className = "premium-gate-price-current";
@@ -578,7 +586,6 @@ export function createPremiumGateCard(options = {}) {
     "Расширенный недельный отчет",
     "Расширенный месячный отчет",
     "Разбор почему вес стоит",
-    "Серия и персональный дашборд",
     "График веса и динамики",
     "Гибкие напоминания",
   ].forEach((text) => {
@@ -590,7 +597,8 @@ export function createPremiumGateCard(options = {}) {
 
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "btn btn-primary w-full rounded-xl font-semibold";
+  button.className = "btn-primary-organic";
+  button.style.marginTop = "1rem";
   button.textContent = ctaText;
   if (typeof onCta === "function") {
     button.addEventListener("click", onCta);
@@ -610,11 +618,16 @@ export function createPremiumGateCard(options = {}) {
 
 export function createFormField({ label, input }) {
   const field = document.createElement("label");
-  field.className = "form-control w-full";
+  field.className = "form-field";
 
   const text = document.createElement("span");
-  text.className = "mb-2 block text-sm font-medium text-slate-700";
+  text.className = "form-label";
   text.textContent = label;
+
+  // Apply organic input styling
+  input.className = input.className
+    ? input.className.replace(/input\b|select\b|input-bordered\b/g, "").trim() + " input-organic"
+    : "input-organic";
 
   field.append(text, input);
   return field;
@@ -628,115 +641,125 @@ export function createResultCard(result, options = {}) {
     onRetry = null,
   } = options;
   const section = document.createElement("section");
-  section.className = "flex flex-col gap-4";
+  section.className = "result-section";
 
   const totals = result?.totals || {};
-  const hero = document.createElement("section");
-  hero.className = "bg-white rounded-2xl shadow-sm p-5";
 
-  const metaRow = document.createElement("div");
-  metaRow.className = "flex items-center justify-between gap-2";
+  // ── Hero card ──
+  const hero = document.createElement("section");
+  hero.className = "result-hero";
 
   const badges = document.createElement("div");
-  badges.className = "flex flex-wrap items-center gap-2";
+  badges.className = "result-badges";
 
   if (mealTime) {
     const mealBadge = document.createElement("span");
-    mealBadge.className = "rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600";
+    mealBadge.className = "result-badge result-badge-meal";
     mealBadge.textContent = mealTimeLabel(mealTime);
     badges.append(mealBadge);
   }
 
   if (isPremium) {
     const premiumBadge = document.createElement("span");
-    premiumBadge.className = "rounded-full bg-violet-100 px-2.5 py-1 text-xs font-medium text-violet-700";
-    premiumBadge.textContent = "Premium";
+    premiumBadge.className = "result-badge result-badge-premium";
+    premiumBadge.textContent = "✦ Premium";
     badges.append(premiumBadge);
   }
 
   const warnings = result?.warnings || [];
   if (warnings.length > 0 && !hideWarningChip) {
     const warningChip = document.createElement("span");
-    warningChip.className = "rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700";
+    warningChip.className = "result-badge result-badge-warning";
     warningChip.textContent = "Есть неточность";
     badges.append(warningChip);
   }
 
   if (badges.childElementCount > 0) {
-    metaRow.append(badges);
-    hero.append(metaRow);
+    hero.append(badges);
   }
 
   const topLabel = document.createElement("p");
-  topLabel.className = "text-xs text-slate-500 mt-2";
+  topLabel.className = "result-hero-label";
   topLabel.textContent = "Общая оценка";
 
   const calories = document.createElement("p");
-  calories.className = "mt-2 text-3xl font-semibold tracking-tight text-slate-900";
-  calories.textContent = `≈ ${formatCalories(totals.calories_kcal)} ккал`;
+  calories.className = "result-hero-kcal";
+
+  const kcalNum = document.createTextNode(`≈ ${formatCalories(totals.calories_kcal)}`);
+  const kcalUnit = document.createElement("sup");
+  kcalUnit.textContent = "ккал";
+  calories.append(kcalNum, kcalUnit);
 
   const estimateCaption = document.createElement("p");
-  estimateCaption.className = "mt-1 text-xs text-slate-400";
-  estimateCaption.textContent = "Оценка по фото, возможна погрешность";
+  estimateCaption.className = "result-hero-sub";
+  estimateCaption.textContent = "Оценка по фото · возможна погрешность";
 
+  // Confidence bar
   const confidence = Number(result?.overall_confidence ?? 0);
-  const confidenceText = document.createElement("p");
-  confidenceText.className = "mt-3 text-xs text-slate-500";
-  confidenceText.textContent = `Точность: ${Math.round(Math.max(0, Math.min(1, confidence)) * 100)}%`;
+  const confRow = document.createElement("div");
+  confRow.className = "result-confidence-row";
 
-  const confidenceTrack = document.createElement("div");
-  confidenceTrack.className = "mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-200";
-  const confidenceFill = document.createElement("div");
-  confidenceFill.className = "h-full rounded-full bg-slate-400";
-  confidenceFill.style.width = `${Math.round(Math.max(0, Math.min(1, confidence)) * 100)}%`;
-  confidenceTrack.append(confidenceFill);
+  const confLabel = document.createElement("span");
+  confLabel.textContent = "Точность";
 
+  const confBar = document.createElement("div");
+  confBar.className = "result-confidence-bar";
+  const confFill = document.createElement("div");
+  confFill.className = "result-confidence-fill";
+  confFill.style.width = `${Math.round(Math.max(0, Math.min(1, confidence)) * 100)}%`;
+  confBar.append(confFill);
+
+  const confPct = document.createElement("span");
+  confPct.textContent = `${Math.round(Math.max(0, Math.min(1, confidence)) * 100)}%`;
+
+  confRow.append(confLabel, confBar, confPct);
+
+  // Macros grid
   const macroRow = document.createElement("div");
-  macroRow.className = "mt-4 grid grid-cols-3 gap-2";
+  macroRow.className = "result-macro-grid";
   macroRow.append(
     statBlock("Белки", `${formatMacro(totals.protein_g)} г`),
     statBlock("Жиры", `${formatMacro(totals.fat_g)} г`),
-    statBlock("Углеводы", `${formatMacro(totals.carbs_g)} г`),
+    statBlock("Углев", `${formatMacro(totals.carbs_g)} г`),
   );
 
-  hero.append(topLabel, calories, estimateCaption, confidenceText, confidenceTrack, macroRow);
+  hero.append(topLabel, calories, estimateCaption, confRow, macroRow);
   section.append(hero);
 
+  // ── Not recognized ──
   if (result?.recognized === false) {
     const empty = document.createElement("section");
-    empty.className = "rounded-2xl border border-amber-200 bg-amber-50 p-5";
+    empty.className = "result-not-recognized";
 
     const icon = document.createElement("div");
-    icon.className = "text-2xl";
+    icon.className = "result-not-recognized-icon";
     icon.textContent = "📷";
 
     const title = document.createElement("p");
-    title.className = "mt-2 text-sm font-medium text-slate-800";
+    title.className = "result-not-recognized-title";
     title.textContent = "Фото получилось не очень понятным";
 
     const text = document.createElement("p");
-    text.className = "mt-1 text-sm text-slate-600";
-    text.textContent = "Мы не смогли уверенно распознать блюдо. Попробуйте еще раз.";
+    text.className = "result-not-recognized-text";
+    text.textContent = "Мы не смогли уверенно распознать блюдо. Попробуйте ещё раз.";
 
     const tips = document.createElement("div");
-    tips.className = "mt-3 flex flex-wrap gap-2";
+    tips.className = "result-not-recognized-tips";
 
-    const lightTip = document.createElement("span");
-    lightTip.className = "rounded-full bg-white px-3 py-1 text-xs text-slate-600";
-    lightTip.textContent = "Больше света";
-
-    const topTip = document.createElement("span");
-    topTip.className = "rounded-full bg-white px-3 py-1 text-xs text-slate-600";
-    topTip.textContent = "Снимайте сверху";
-
-    tips.append(lightTip, topTip);
+    for (const tip of ["Больше света", "Снимайте сверху"]) {
+      const chip = document.createElement("span");
+      chip.className = "result-tip-chip";
+      chip.textContent = tip;
+      tips.append(chip);
+    }
 
     empty.append(icon, title, text, tips);
 
     if (typeof onRetry === "function") {
       const retryBtn = document.createElement("button");
       retryBtn.type = "button";
-      retryBtn.className = "btn btn-primary mt-4 w-full rounded-xl font-semibold";
+      retryBtn.className = "btn-primary-organic";
+      retryBtn.style.marginTop = "1rem";
       retryBtn.textContent = "Повторить";
       retryBtn.addEventListener("click", onRetry);
       empty.append(retryBtn);
@@ -745,53 +768,60 @@ export function createResultCard(result, options = {}) {
     section.append(empty);
   }
 
+  // ── Items ──
   const items = result?.items || [];
   const itemsTitle = document.createElement("h3");
-  itemsTitle.className = "text-xs font-medium uppercase tracking-wide text-slate-500";
+  itemsTitle.className = "result-section-title";
   itemsTitle.textContent = "Блюда";
   section.append(itemsTitle);
 
   if (items.length === 0) {
     const empty = document.createElement("p");
-    empty.className = "text-sm text-slate-600";
+    empty.className = "result-empty";
     empty.textContent = "Нет детализированных позиций.";
     section.append(empty);
   } else {
     const list = document.createElement("div");
-    list.className = "flex flex-col gap-3";
+    list.className = "result-items-list";
     for (const item of items) {
       const card = document.createElement("article");
-      card.className = "bg-white rounded-2xl shadow-sm p-5";
+      card.className = "result-item-card";
 
       const line1 = document.createElement("div");
-      line1.className = "flex items-center justify-between gap-2";
+      line1.className = "result-item-top";
 
       const left = document.createElement("div");
-      left.className = "flex items-center gap-2";
+      left.className = "result-item-left";
 
       const name = document.createElement("strong");
-      name.className = "text-sm font-semibold text-slate-900";
+      name.className = "result-item-name";
       name.textContent = toRussianItemName(item.name);
-
-      const kcal = document.createElement("span");
-      kcal.className = "text-sm font-semibold text-emerald-700 text-right";
-      kcal.textContent = `≈ ${formatCalories(item.calories_kcal)} ккал`;
-
       left.append(name);
 
       const itemCalories = Number(item?.calories_kcal ?? 0);
       if (Number.isFinite(itemCalories) && itemCalories > 400) {
         const hotBadge = document.createElement("span");
-        hotBadge.className = "rounded-full bg-lime-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-lime-700";
+        hotBadge.className = "result-item-badge-hot";
         hotBadge.textContent = "Калорийно";
         left.append(hotBadge);
       }
 
+      if (item._kbju_source && item._kbju_source !== "exact") {
+        const sourceBadge = document.createElement("span");
+        sourceBadge.className = "result-item-badge-source";
+        sourceBadge.textContent = item._kbju_source === "base" ? "базовое КБЖУ" : "примерное КБЖУ";
+        left.append(sourceBadge);
+      }
+
+      const kcal = document.createElement("span");
+      kcal.className = "result-item-kcal";
+      kcal.textContent = `≈ ${formatCalories(item.calories_kcal)} ккал`;
+
       line1.append(left, kcal);
 
       const line2 = document.createElement("p");
-      line2.className = "mt-2 text-sm text-slate-500";
-      line2.textContent = `Б ${formatMacro(item.protein_g)} • Ж ${formatMacro(item.fat_g)} • У ${formatMacro(item.carbs_g)} • ${formatMacro(item.grams)} г`;
+      line2.className = "result-item-meta";
+      line2.textContent = `Б ${formatMacro(item.protein_g)} · Ж ${formatMacro(item.fat_g)} · У ${formatMacro(item.carbs_g)} · ${formatMacro(item.grams)} г`;
 
       card.append(line1, line2);
       list.append(card);
@@ -799,13 +829,13 @@ export function createResultCard(result, options = {}) {
     section.append(list);
   }
 
+  // ── Warnings ──
   if (warnings.length > 0) {
     const warningWrap = document.createElement("div");
-    warningWrap.className = "space-y-2";
-
+    warningWrap.className = "result-warnings";
     for (const warning of warnings) {
       const line = document.createElement("p");
-      line.className = "text-xs text-slate-500";
+      line.className = "result-warning-text";
       line.textContent = warning;
       warningWrap.append(line);
     }
@@ -817,11 +847,11 @@ export function createResultCard(result, options = {}) {
 
 export function createHistoryList(items, onOpen) {
   const section = document.createElement("section");
-  section.className = "flex flex-col gap-3";
+  section.className = "history-list";
 
   if (!items.length) {
     const empty = document.createElement("div");
-    empty.className = "rounded-2xl border border-slate-200 bg-white px-4 py-12 text-center text-sm text-slate-600";
+    empty.className = "history-empty";
     empty.textContent = "Пока нет приёмов пищи";
     section.append(empty);
     return section;
@@ -830,18 +860,16 @@ export function createHistoryList(items, onOpen) {
   for (const item of items) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "w-full rounded-2xl border border-slate-100 bg-white p-4 text-left shadow-sm transition-all duration-150 ease-in-out hover:-translate-y-0.5";
+    button.className = "history-item";
     button.addEventListener("click", () => onOpen(item.id));
 
     const top = document.createElement("div");
-    top.className = "flex items-center justify-between gap-2";
+    top.className = "history-item-top";
 
     const dt = document.createElement("span");
-    dt.className = "text-xs text-slate-500";
+    dt.className = "history-item-time";
     dt.textContent = formatDateTime(item.createdAt);
 
-    const mealBadge = document.createElement("span");
-    mealBadge.className = "rounded-full border border-slate-200 px-2 py-1 text-xs text-slate-600 capitalize";
     const mealLabels = {
       breakfast: "Завтрак",
       lunch: "Обед",
@@ -849,15 +877,27 @@ export function createHistoryList(items, onOpen) {
       snack: "Перекус",
       unknown: "—",
     };
+    const mealBadge = document.createElement("span");
+    mealBadge.className = "history-item-badge";
     mealBadge.textContent = mealLabels[item.mealTime] || "—";
 
     top.append(dt, mealBadge);
 
     const calories = document.createElement("div");
-    calories.className = "mt-2 text-xl font-semibold tracking-tight text-slate-900";
-    calories.textContent = `${item.totals?.calories_kcal ?? 0} ккал`;
+    calories.className = "history-item-kcal";
 
-    button.append(top, calories);
+    const kcalNum = document.createTextNode(`${item.totals?.calories_kcal ?? 0}`);
+    const kcalSup = document.createElement("sup");
+    kcalSup.textContent = "ккал";
+    calories.append(kcalNum, kcalSup);
+
+    // Macro mini-line
+    const macro = document.createElement("p");
+    macro.className = "history-item-macro";
+    const t = item.totals || {};
+    macro.textContent = `Б ${formatMacro(t.protein_g)} · Ж ${formatMacro(t.fat_g)} · У ${formatMacro(t.carbs_g)}`;
+
+    button.append(top, calories, macro);
     section.append(button);
   }
 
@@ -870,7 +910,7 @@ export function showToast(message, variant = "error") {
     return;
   }
 
-  toast.className = "alert toast-base";
+  toast.className = "toast-base";
   if (variant === "warning") {
     toast.classList.add("alert-warning");
   } else if (variant === "info") {
@@ -897,7 +937,7 @@ export function showToast(message, variant = "error") {
 showToast.timer = null;
 
 export function createStreakBadge(streak, onClick) {
-  const { currentStreak = 0, bestStreak = 0 } = streak || {};
+  const { currentStreak = 0 } = streak || {};
 
   const badge = document.createElement("button");
   badge.type = "button";
@@ -914,7 +954,6 @@ export function createStreakBadge(streak, onClick) {
 
   badge.append(icon, count);
 
-  // Apply color state
   if (currentStreak >= 3) {
     badge.classList.add("streak-badge--active");
   } else if (currentStreak === 0) {
@@ -929,7 +968,7 @@ export function createStreakBadge(streak, onClick) {
 }
 
 export function createStreakModal(streak, onClose) {
-  const { currentStreak = 0, bestStreak = 0, lastCompletedDate = null } = streak || {};
+  const { currentStreak = 0, bestStreak = 0 } = streak || {};
 
   const overlay = document.createElement("div");
   overlay.className = "streak-modal-overlay";
@@ -976,14 +1015,12 @@ export function createStreakModal(streak, onClose) {
   content.append(header, body);
   overlay.append(content);
 
-  // Close on overlay click
   overlay.addEventListener("click", (e) => {
     if (e.target === overlay && typeof onClose === "function") {
       onClose();
     }
   });
 
-  // Close on Escape key
   const handleKeydown = (e) => {
     if (e.key === "Escape" && typeof onClose === "function") {
       onClose();
@@ -1112,8 +1149,8 @@ export function createShareCard(options = {}) {
 
   progressRing.append(svg);
 
-  const content = document.createElement("div");
-  content.className = "share-progress-content";
+  const ringContent = document.createElement("div");
+  ringContent.className = "share-progress-content";
 
   const value = document.createElement("div");
   value.className = "share-progress-value";
@@ -1123,8 +1160,8 @@ export function createShareCard(options = {}) {
   target.className = "share-progress-target";
   target.textContent = `/ ${Math.round(safeGoal)} ккал`;
 
-  content.append(value, target);
-  progressRing.append(content);
+  ringContent.append(value, target);
+  progressRing.append(ringContent);
   card.append(progressRing);
 
   const caption = document.createElement("p");

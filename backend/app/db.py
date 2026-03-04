@@ -186,6 +186,53 @@ class Database:
                     idempotency_key TEXT
                 );
 
+                CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+                CREATE TABLE IF NOT EXISTS foods (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    external_id TEXT UNIQUE,
+                    name TEXT NOT NULL,
+                    normalized_name TEXT NOT NULL,
+                    aliases TEXT[] NOT NULL DEFAULT ARRAY[]::text[],
+                    normalized_aliases TEXT[] NOT NULL DEFAULT ARRAY[]::text[],
+                    compact_aliases TEXT[] NOT NULL DEFAULT ARRAY[]::text[],
+                    alias_search_text TEXT NOT NULL DEFAULT '',
+                    compact_alias_search_text TEXT NOT NULL DEFAULT '',
+                    food_group TEXT,
+                    base_name TEXT,
+                    normalized_base_name TEXT,
+                    state TEXT,
+                    calories_per_100g DOUBLE PRECISION,
+                    protein_per_100g DOUBLE PRECISION,
+                    fat_per_100g DOUBLE PRECISION,
+                    carbs_per_100g DOUBLE PRECISION,
+                    kbju_source TEXT,
+                    source_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_foods_normalized_name
+                    ON foods (normalized_name);
+
+                CREATE INDEX IF NOT EXISTS idx_foods_normalized_base_name
+                    ON foods (normalized_base_name);
+
+                CREATE INDEX IF NOT EXISTS idx_foods_normalized_aliases_gin
+                    ON foods USING GIN (normalized_aliases);
+
+                CREATE INDEX IF NOT EXISTS idx_foods_compact_aliases_gin
+                    ON foods USING GIN (compact_aliases);
+
+                CREATE INDEX IF NOT EXISTS idx_foods_normalized_name_trgm
+                    ON foods USING GIN (normalized_name gin_trgm_ops);
+
+                CREATE INDEX IF NOT EXISTS idx_foods_alias_search_text_trgm
+                    ON foods USING GIN (alias_search_text gin_trgm_ops);
+
+                CREATE INDEX IF NOT EXISTS idx_foods_compact_alias_search_text_trgm
+                    ON foods USING GIN (compact_alias_search_text gin_trgm_ops);
+
                 ALTER TABLE meals
                     ADD COLUMN IF NOT EXISTS description TEXT;
 
@@ -236,6 +283,61 @@ class Database:
                     updated_at TIMESTAMPTZ DEFAULT NOW(),
                     UNIQUE(user_id, idempotency_key)
                 );
+
+                CREATE TABLE IF NOT EXISTS meal_analysis_sessions (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    recognized BOOLEAN NOT NULL DEFAULT FALSE,
+                    overall_confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+                    image_path TEXT,
+                    ai_model TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    consumed_at TIMESTAMPTZ
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_meal_analysis_sessions_user_created
+                    ON meal_analysis_sessions (user_id, created_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_meal_analysis_sessions_user_expires
+                    ON meal_analysis_sessions (user_id, expires_at DESC);
+
+                CREATE TABLE IF NOT EXISTS meal_analysis_session_items (
+                    session_id UUID NOT NULL REFERENCES meal_analysis_sessions(id) ON DELETE CASCADE,
+                    client_item_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    match_type TEXT NOT NULL,
+                    confidence DOUBLE PRECISION NOT NULL,
+                    nutrition_per_100g JSONB NOT NULL,
+                    default_weight_g DOUBLE PRECISION,
+                    warnings TEXT[] NOT NULL DEFAULT ARRAY[]::text[],
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    adjusted_name TEXT,
+                    adjusted_weight_g DOUBLE PRECISION,
+                    PRIMARY KEY (session_id, client_item_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_meal_analysis_items_session
+                    ON meal_analysis_session_items (session_id);
+
+                CREATE TABLE IF NOT EXISTS food_match_feedback (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    session_id UUID REFERENCES meal_analysis_sessions(id) ON DELETE SET NULL,
+                    normalized_input_name TEXT NOT NULL,
+                    resolved_food_name TEXT,
+                    adjusted_name TEXT,
+                    adjusted_weight_g DOUBLE PRECISION,
+                    match_type TEXT NOT NULL,
+                    confirmed BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_food_match_feedback_user_input
+                    ON food_match_feedback (user_id, normalized_input_name, created_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_food_match_feedback_user_adjusted
+                    ON food_match_feedback (user_id, adjusted_name, created_at DESC);
 
                 CREATE TABLE IF NOT EXISTS events (
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

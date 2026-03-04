@@ -210,6 +210,31 @@ export function analyzeMeal(imageFile, options = {}) {
   });
 }
 
+export function analyzeMealStep1(imageFile, options = {}) {
+  const description = typeof options.description === "string" ? options.description.trim() : "";
+  const formData = new FormData();
+  formData.append("image", imageFile);
+  if (description) {
+    formData.append("description", description);
+  }
+
+  return request("/v1/meals/analysis-step1", {
+    method: "POST",
+    body: formData,
+    isMultipart: true,
+  });
+}
+
+export function analyzeMealStep2(payload) {
+  return request("/v1/meals/analysis-step2", {
+    method: "POST",
+    body: payload,
+    headers: {
+      "Idempotency-Key": createUuid(),
+    },
+  });
+}
+
 export function getStatsDaily(date) {
   return request(`/v1/stats/daily?date=${encodeURIComponent(date)}`);
 }

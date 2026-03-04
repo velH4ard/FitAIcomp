@@ -17,6 +17,8 @@ import {
   getUsageToday,
   getStreak,
   analyzeMeal,
+  analyzeMealStep1,
+  analyzeMealStep2,
   setTokenGetter,
   setSilentReauthHandler,
   setTokenInvalidator,
@@ -36,7 +38,6 @@ import {
   createResultCard,
   createRoot,
   createSecondaryButton,
-  createSubscriptionHint,
   createStreakBadge,
   createStreakModal,
   createShareCard,
@@ -108,6 +109,10 @@ const state = {
   premiumGateReason: "",
   goalDraft: "",
   goalSaving: false,
+  analysisStep1: null,
+  analysisDraftItems: [],
+  analysisStep2Result: null,
+  analysisFeedback: "",
 };
 
 let tokenRefreshTimer = null;
@@ -430,6 +435,13 @@ function mapAnalyzeErrorToToast(error) {
   return messages[error.code] || "Попробуйте позже";
 }
 
+function confidenceLabelRu(value) {
+  const v = Number(value || 0);
+  if (v > 0.8) return "высокая уверенность";
+  if (v >= 0.5) return "средняя";
+  return "низкая — уточните";
+}
+
 function routeByBusinessError(error) {
   if (!(error instanceof ApiError)) {
     return false;
@@ -640,8 +652,9 @@ function createPremiumGateSection(note = "") {
 function createPremiumHeaderButton() {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "btn btn-sm rounded-full border border-violet-200 bg-violet-100 px-4 text-violet-700 shadow-sm transition-all duration-150 hover:border-violet-300 hover:bg-violet-200";
-  button.textContent = "Premium";
+  button.className = "btn-premium-header";
+  const isActive = state.subscription?.status === "active";
+  button.textContent = isActive ? "✦ Premium" : "Premium";
   button.addEventListener("click", openPremiumEntryPoint);
   return button;
 }
@@ -710,51 +723,100 @@ function maybeShowQuoteOverlay() {
 
 function createDailySummaryCard() {
   const card = document.createElement("section");
-  card.className = "rounded-2xl bg-white p-5 shadow-sm";
+  card.className = "glass daily-card fade-up d1";
 
   const consumed = Math.round(state.dailyStats?.calories_kcal ?? 0);
   const target = getDailyTarget(state.user?.profile);
   const remaining = Math.max(0, target - consumed);
   const progress = clampPercent((consumed / Math.max(1, target)) * 100);
 
-  const label = document.createElement("p");
-  label.className = "text-xs text-slate-500";
-  label.textContent = "Дневной итог";
+  const topLabel = document.createElement("p");
+  topLabel.className = "daily-card-label";
+  topLabel.textContent = "Сегодня";
 
-  const title = document.createElement("p");
-  title.className = "mt-2 text-3xl font-semibold tracking-tight text-slate-900";
-  title.textContent = `${consumed} ккал`;
+  const kcalEl = document.createElement("p");
+  kcalEl.className = "daily-card-kcal";
+  const kcalNum = document.createTextNode(consumed.toLocaleString("ru-RU"));
+  const kcalSup = document.createElement("sup");
+  kcalSup.textContent = "ккал";
+  kcalEl.append(kcalNum, kcalSup);
 
-  const targetLabel = document.createElement("p");
-  targetLabel.className = "mt-2 text-sm text-slate-700";
-  targetLabel.textContent = `Сегодня: ${consumed} / ${target} ккал`;
+  const subLabel = document.createElement("p");
+  subLabel.className = "daily-card-sub";
+  subLabel.textContent = `из ${target.toLocaleString("ru-RU")} целевых · осталось ${remaining.toLocaleString("ru-RU")}`;
 
-  const track = createProgressBar({
-    value: progress,
-    max: 100,
-    label: "Прогресс по дневной цели",
-  });
+  // Row: ring + macros
+  const row = document.createElement("div");
+  row.className = "daily-card-row";
 
-  const bottom = document.createElement("div");
-  bottom.className = "mt-3 flex items-center justify-between gap-2";
+  // Ring
+  const ringWrap = document.createElement("div");
+  ringWrap.className = "daily-ring-wrap";
 
-  const remainingLabel = document.createElement("span");
-  remainingLabel.className = "text-sm text-slate-600";
-  remainingLabel.textContent = `Осталось ${remaining} ккал`;
+  const circumference = 2 * Math.PI * 36;
+  const offset = circumference * (1 - progress / 100);
+  ringWrap.innerHTML = `
+    <svg viewBox="0 0 88 88" width="88" height="88" style="transform:rotate(-90deg)">
+      <circle class="ring-track" cx="44" cy="44" r="36"/>
+      <circle class="ring-fill" cx="44" cy="44" r="36"
+        stroke-dasharray="${circumference.toFixed(2)}"
+        stroke-dashoffset="${offset.toFixed(2)}"/>
+    </svg>
+    <div class="ring-center">
+      <span class="ring-pct">${Math.round(progress)}%</span>
+      <span class="ring-pct-label">цель</span>
+    </div>`;
 
-  const photosLeft = document.createElement("span");
-  photosLeft.className = "rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700";
-  const remainingPhotos = state.usage?.remaining ?? state.subscription?.remainingToday ?? 0;
-  const limitPhotos = state.usage?.dailyLimit ?? state.subscription?.dailyLimit ?? 0;
-  photosLeft.textContent = `${remainingPhotos} из ${limitPhotos} фото`;
+  // Macros
+  const macros = document.createElement("div");
+  macros.className = "daily-macros";
 
-  bottom.append(remainingLabel, photosLeft);
-  card.append(label, title, targetLabel, track, bottom);
+  const protein = Math.round(state.dailyStats?.protein_g ?? 0);
+  const fat = Math.round(state.dailyStats?.fat_g ?? 0);
+  const carbs = Math.round(state.dailyStats?.carbs_g ?? 0);
+  const proteinTarget = 120;
+  const fatTarget = 80;
+  const carbsTarget = 250;
+
+  for (const [label, val, tgt, color] of [
+    ["Белки", protein, proteinTarget, "var(--sage)"],
+    ["Жиры", fat, fatTarget, "var(--clay)"],
+    ["Углев", carbs, carbsTarget, "var(--oat)"],
+  ]) {
+    const macroRow = document.createElement("div");
+    macroRow.className = "macro-row";
+
+    const lbl = document.createElement("span");
+    lbl.className = "macro-label";
+    lbl.textContent = label;
+
+    const barWrap = document.createElement("div");
+    barWrap.className = "macro-bar-wrap";
+    const bar = document.createElement("div");
+    bar.className = "macro-bar";
+    bar.style.width = `${clampPercent((val / Math.max(1, tgt)) * 100)}%`;
+    bar.style.background = color;
+    barWrap.append(bar);
+
+    const valEl = document.createElement("span");
+    valEl.className = "macro-val";
+    valEl.textContent = `${val}г`;
+
+    macroRow.append(lbl, barWrap, valEl);
+    macros.append(macroRow);
+  }
+
+  row.append(ringWrap, macros);
+
+  const track = createProgressBar({ value: progress, max: 100, label: "Прогресс" });
+  track.style.display = "none"; // hidden, we use ring instead
+
+  card.append(topLabel, kcalEl, subLabel, row);
 
   if (state.subscription?.status === "active" && state.subscription?.activeUntil) {
     const premium = document.createElement("div");
-    premium.className = "mt-3 inline-flex w-fit items-center rounded-full bg-violet-100 px-3 py-1 text-xs font-medium text-violet-700";
-    premium.textContent = `Премиум активен до ${formatDate(state.subscription.activeUntil)}`;
+    premium.className = "daily-premium-badge";
+    premium.textContent = `✦ Премиум активен до ${formatDate(state.subscription.activeUntil)}`;
     card.append(premium);
   }
 
@@ -979,18 +1041,44 @@ async function handleAnalyze(file) {
   state.screen = "result";
   render();
   try {
-    const response = await analyzeMeal(file, {
+    const step1 = await analyzeMealStep1(file, {
       description: mealDescription,
     });
-    state.lastAnalyzeResponse = response;
-    state.usage = response.usage;
+
+    state.analysisStep1 = step1;
+    state.analysisDraftItems = (step1.items || []).map((item) => {
+      const defaultWeight = Number(item.defaultWeightG);
+      const safeWeight = Number.isFinite(defaultWeight) && defaultWeight > 0 ? defaultWeight : 150;
+      return {
+        clientItemId: item.clientItemId,
+        name: item.name,
+        editedName: item.name,
+        matchType: item.matchType,
+        confidence: Number(item.confidence || 0),
+        warnings: Array.isArray(item.warnings) ? item.warnings : [],
+        kbjuSource: item.matchType === "exact" ? "exact" : item.matchType === "fuzzy" ? "fallback" : "unknown",
+        weightG: Math.max(1, Math.round(safeWeight)),
+      };
+    });
+
+    if (state.analysisDraftItems.length > 0) {
+      state.screen = "analysisAdjust";
+    } else {
+      const response = await analyzeMeal(file, {
+        description: mealDescription,
+      });
+      state.lastAnalyzeResponse = response;
+      state.usage = response.usage;
+      state.screen = "result";
+    }
+
     state.mealDescription = "";
     state.mealDescriptionError = "";
     state.mealDescriptionExpanded = false;
 
     // Optimistic daily summary update so the main screen reflects calories immediately.
     const prev = state.dailyStats || {};
-    const totals = response?.meal?.result?.totals || {};
+    const totals = state.lastAnalyzeResponse?.meal?.result?.totals || {};
     const prevMealsCount = toNumber(prev.mealsCount ?? prev.meals_count, 0);
     const prevCalories = toNumber(prev.calories_kcal, 0);
     const prevProtein = toNumber(prev.protein_g, 0);
@@ -1028,7 +1116,9 @@ async function handleAnalyze(file) {
       // Keep optimistic stats if refresh fails.
     }
 
-    state.screen = "result";
+    if (state.screen !== "analysisAdjust") {
+      state.screen = "result";
+    }
   } catch (error) {
     const backendDescriptionError = getDescriptionBackendError(error);
     if (backendDescriptionError) {
@@ -1051,33 +1141,207 @@ async function handleAnalyze(file) {
   }
 }
 
+async function submitAnalysisStep2() {
+  if (!state.analysisStep1?.analysisSessionId) {
+    showToast("Сессия анализа не найдена");
+    return;
+  }
+
+  setBusy(true);
+  try {
+    const payload = {
+      analysisSessionId: state.analysisStep1.analysisSessionId,
+      mealTime: "unknown",
+      items: state.analysisDraftItems.map((item) => ({
+        clientItemId: item.clientItemId,
+        weight_g: Math.max(1, Number(item.weightG || 1)),
+        adjustedName: String(item.editedName || item.name || "").trim() || undefined,
+      })),
+    };
+    const response = await analyzeMealStep2(payload);
+    state.analysisStep2Result = response;
+    state.lastAnalyzeResponse = response;
+    state.usage = response.usage;
+    state.screen = "analysisSummary";
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "NOT_FOUND") {
+      showToast("Сессия истекла. Загрузите фото заново.");
+      state.screen = "main";
+    } else {
+      showToast(mapFriendlyError(error));
+    }
+  } finally {
+    setBusy(false);
+    render();
+  }
+}
+
+function renderAnalysisAdjustScreen() {
+  const root = createRoot();
+  const step1 = state.analysisStep1;
+  const items = state.analysisDraftItems || [];
+
+  const header = document.createElement("section");
+  header.className = "glass analytics-card fade-up d1";
+
+  const title = document.createElement("p");
+  title.className = "analytics-label";
+  title.textContent = "Шаг 2 — Проверьте вес";
+
+  const subtitle = document.createElement("p");
+  subtitle.style.cssText = "font-size:0.9375rem;font-weight:500;color:var(--bark);margin-top:0.25rem;";
+  subtitle.textContent = "Уточните граммовку каждого блюда";
+
+  const expiry = document.createElement("p");
+  expiry.className = "analytics-hint";
+  expiry.textContent = `Сессия активна до ${new Date(step1?.expiresAt || Date.now()).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}`;
+
+  header.append(title, subtitle, expiry);
+  root.append(header);
+
+  const list = document.createElement("div");
+  list.style.cssText = "display:flex;flex-direction:column;gap:0.625rem;";
+
+  for (const item of items) {
+    const row = document.createElement("article");
+    row.className = "adjust-item fade-up d2";
+
+    const top = document.createElement("div");
+    top.className = "adjust-item-top";
+
+    const matchClass = item.matchType === "exact"
+      ? "adjust-match-badge--exact"
+      : item.matchType === "fuzzy"
+        ? "adjust-match-badge--fuzzy"
+        : "adjust-match-badge--unknown";
+
+    const typeLabel = document.createElement("span");
+    typeLabel.className = `adjust-match-badge ${matchClass}`;
+    typeLabel.textContent = item.matchType === "exact" ? "точно" : item.matchType === "fuzzy" ? "приблизительно" : "неизвестно";
+
+    const conf = document.createElement("span");
+    conf.className = "adjust-confidence";
+    conf.textContent = confidenceLabelRu(item.confidence);
+    top.append(typeLabel, conf);
+
+    const nameInput = document.createElement("input");
+    nameInput.className = "input-organic";
+    nameInput.style.marginTop = "0.75rem";
+    nameInput.value = item.editedName || item.name;
+    nameInput.addEventListener("input", () => {
+      item.editedName = nameInput.value;
+    });
+
+    const weightLabel = document.createElement("p");
+    weightLabel.className = "adjust-weight-label";
+    weightLabel.textContent = `Вес: ${item.weightG || 150} г`;
+
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = "1";
+    slider.max = "1500";
+    slider.step = "1";
+    slider.value = String(item.weightG || 150);
+    slider.style.cssText = "width:100%;margin-top:0.375rem;accent-color:var(--sage);";
+
+    slider.addEventListener("input", () => {
+      item.weightG = Number(slider.value);
+      weightLabel.textContent = `Вес: ${item.weightG} г`;
+    });
+
+    row.append(top, nameInput, weightLabel, slider);
+
+    if (Number(item.confidence || 0) < 0.5) {
+      const low = document.createElement("p");
+      low.className = "adjust-low-conf-hint";
+      low.textContent = "Низкая уверенность — уточните название и вес.";
+      row.append(low);
+    }
+
+    list.append(row);
+  }
+
+  root.append(list);
+  root.append(
+    createPrimaryButton("Подтвердить и рассчитать", submitAnalysisStep2, {
+      disabled: state.busy || !items.length,
+      loading: state.busy,
+    }),
+  );
+  return root;
+}
+
+function renderAnalysisSummaryScreen() {
+  const root = createRoot();
+  const payload = state.analysisStep2Result;
+  if (!payload?.meal?.result) {
+    const empty = document.createElement("p");
+    empty.className = "result-empty";
+    empty.textContent = "Нет данных анализа";
+    root.append(empty);
+    return root;
+  }
+
+  root.append(createResultCard(payload.meal.result, {
+    mealTime: payload.meal.mealTime,
+    isPremium: state.subscription?.status === "active",
+    hideWarningChip: false,
+  }));
+
+  const feedback = document.createElement("section");
+  feedback.className = "feedback-card fade-up d3";
+  const q = document.createElement("p");
+  q.className = "feedback-card-q";
+  q.textContent = "Распознавание было верным?";
+  const actions = document.createElement("div");
+  actions.className = "feedback-card-actions";
+  actions.append(
+    createSecondaryButton("Да", () => {
+      state.analysisFeedback = "yes";
+      showToast("Спасибо за обратную связь", "info");
+    }),
+    createSecondaryButton("Нет", () => {
+      state.analysisFeedback = "no";
+      showToast("Поняли, улучшим распознавание", "info");
+    }),
+  );
+  feedback.append(q, actions);
+  root.append(feedback);
+  return root;
+}
+
 function createAnalyzeSkeletonScreen() {
   const section = document.createElement("section");
-  section.className = "flex flex-col gap-4";
+  section.style.cssText = "display:flex;flex-direction:column;gap:1rem;";
 
   const hero = document.createElement("section");
-  hero.className = "rounded-2xl bg-white p-5 shadow-sm";
+  hero.className = "glass analytics-card";
 
   const heroTitle = document.createElement("div");
-  heroTitle.className = "skeleton-shimmer skeleton-line h-3 w-24 rounded-md";
+  heroTitle.className = "skeleton-shimmer skeleton-line";
+  heroTitle.style.cssText = "height:0.75rem;width:6rem;border-radius:6px;";
 
   const heroValue = document.createElement("div");
-  heroValue.className = "skeleton-shimmer skeleton-line mt-3 h-8 w-32 rounded-lg";
+  heroValue.className = "skeleton-shimmer skeleton-line";
+  heroValue.style.cssText = "height:2rem;width:8rem;border-radius:8px;margin-top:0.75rem;";
 
   const heroCaption = document.createElement("div");
-  heroCaption.className = "skeleton-shimmer skeleton-line mt-3 h-3 w-40 rounded-md";
+  heroCaption.className = "skeleton-shimmer skeleton-line";
+  heroCaption.style.cssText = "height:0.75rem;width:10rem;border-radius:6px;margin-top:0.625rem;";
 
   const macros = document.createElement("div");
-  macros.className = "mt-4 grid grid-cols-3 gap-2";
+  macros.style.cssText = "display:grid;grid-template-columns:repeat(3,1fr);gap:0.5rem;margin-top:1rem;";
   for (let i = 0; i < 3; i += 1) {
     const macro = document.createElement("div");
-    macro.className = "rounded-xl border border-slate-100 bg-white p-3 shadow-sm";
+    macro.className = "stat-block";
 
     const macroLabel = document.createElement("div");
-    macroLabel.className = "skeleton-shimmer skeleton-line h-3 w-12 rounded-md";
+    macroLabel.className = "skeleton-shimmer skeleton-line";
+    macroLabel.style.cssText = "height:0.6875rem;width:3rem;border-radius:4px;margin:0 auto;";
 
     const macroValue = document.createElement("div");
-    macroValue.className = "skeleton-shimmer skeleton-line mt-2 h-4 w-16 rounded-md";
+    macroValue.className = "skeleton-shimmer skeleton-line";
+    macroValue.style.cssText = "height:1rem;width:4rem;border-radius:6px;margin:0.375rem auto 0;";
 
     macro.append(macroLabel, macroValue);
     macros.append(macro);
@@ -1086,31 +1350,36 @@ function createAnalyzeSkeletonScreen() {
   hero.append(heroTitle, heroValue, heroCaption, macros);
 
   const list = document.createElement("div");
-  list.className = "flex flex-col gap-3";
+  list.style.cssText = "display:flex;flex-direction:column;gap:0.625rem;";
   for (let i = 0; i < 2; i += 1) {
     const card = document.createElement("article");
-    card.className = "rounded-2xl border border-slate-100 bg-white p-4 shadow-sm";
+    card.className = "glass";
+    card.style.cssText = "padding:1rem;";
 
     const lineTop = document.createElement("div");
-    lineTop.className = "flex items-center justify-between gap-2";
+    lineTop.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:0.5rem;";
 
     const left = document.createElement("div");
-    left.className = "skeleton-shimmer skeleton-line h-4 w-28 rounded-md";
+    left.className = "skeleton-shimmer skeleton-line";
+    left.style.cssText = "height:1rem;width:7rem;border-radius:6px;";
 
     const right = document.createElement("div");
-    right.className = "skeleton-shimmer skeleton-line h-6 w-16 rounded-full";
+    right.className = "skeleton-shimmer skeleton-line";
+    right.style.cssText = "height:1.5rem;width:4rem;border-radius:var(--r-pill);";
 
     lineTop.append(left, right);
 
     const lineBottom = document.createElement("div");
-    lineBottom.className = "skeleton-shimmer skeleton-line mt-3 h-3 w-44 rounded-md";
+    lineBottom.className = "skeleton-shimmer skeleton-line";
+    lineBottom.style.cssText = "height:0.6875rem;width:11rem;border-radius:4px;margin-top:0.75rem;";
 
     card.append(lineTop, lineBottom);
     list.append(card);
   }
 
   const loadingText = document.createElement("p");
-  loadingText.className = "text-xs text-slate-500";
+  loadingText.className = "loading-text";
+  loadingText.style.textAlign = "center";
   loadingText.textContent = "Анализируем фото...";
 
   section.append(hero, list, loadingText);
@@ -1280,13 +1549,20 @@ async function refreshAfterResume({ notifyResult = false } = {}) {
 function renderLoadingScreen() {
   const root = createRoot();
   const loadingCard = document.createElement("section");
-  loadingCard.className = "rounded-2xl bg-white p-5 shadow-sm";
+  loadingCard.className = "glass loading-card";
+
+  const icon = document.createElement("div");
+  icon.className = "loading-icon";
+  icon.textContent = "🌿";
+
   const loading = document.createElement("p");
-  loading.className = "text-sm text-slate-600";
+  loading.className = "loading-text";
   loading.textContent = state.loadingText || "Подключаемся к серверу";
-  const spinner = document.createElement("span");
-  spinner.className = "loading loading-spinner loading-md mt-3 text-lime-500";
-  loadingCard.append(loading, spinner);
+
+  const spinner = document.createElement("div");
+  spinner.className = "loading-spinner-organic";
+
+  loadingCard.append(icon, loading, spinner);
   root.append(loadingCard);
   return root;
 }
@@ -1294,13 +1570,22 @@ function renderLoadingScreen() {
 function renderAuthScreen() {
   const root = createRoot();
   const panel = document.createElement("section");
-  panel.className = "rounded-2xl bg-white p-5 shadow-sm";
+  panel.className = "glass auth-card fade-up d1";
+
+  const icon = document.createElement("div");
+  icon.style.cssText = "font-size:3rem;text-align:center;margin-bottom:1rem;animation:float-anim 4s ease-in-out infinite;";
+  icon.textContent = "🌿";
+
+  const title = document.createElement("h2");
+  title.className = "title-serif";
+  title.style.cssText = "font-size:1.5rem;text-align:center;margin-bottom:0.5rem;";
+  title.textContent = "FitAI";
 
   const text = document.createElement("p");
-  text.className = state.authErrorMessage ? "text-sm text-rose-600" : "text-sm text-slate-600";
+  text.className = state.authErrorMessage ? "auth-error-text" : "auth-hint-text";
   text.textContent = state.authErrorMessage || "Откройте приложение через Telegram";
 
-  panel.append(text);
+  panel.append(icon, title, text);
   root.append(panel);
   return root;
 }
@@ -1308,48 +1593,68 @@ function renderAuthScreen() {
 function renderOnboardingScreen() {
   const root = createRoot();
 
+  const header = document.createElement("div");
+  header.className = "onboarding-header fade-up d1";
+
+  const icon = document.createElement("div");
+  icon.style.cssText = "font-size:2.5rem;text-align:center;margin-bottom:0.75rem;";
+  icon.textContent = "🌱";
+
+  const title = document.createElement("h2");
+  title.className = "title-serif";
+  title.style.cssText = "font-size:1.5rem;text-align:center;margin-bottom:0.25rem;";
+  title.textContent = "Расскажите о себе";
+
+  const subtitle = document.createElement("p");
+  subtitle.style.cssText = "font-size:0.8125rem;text-align:center;color:var(--bark);opacity:0.5;";
+  subtitle.textContent = "Нужно заполнить один раз";
+
+  header.append(icon, title, subtitle);
+  root.append(header);
+
   const form = document.createElement("form");
-  form.className = "rounded-2xl bg-white p-5 shadow-sm space-y-4";
+  form.className = "glass onboarding-form fade-up d2";
 
   const gender = document.createElement("select");
-  gender.className = "select select-bordered w-full rounded-xl border-slate-200 bg-white";
-  ["male", "female", "other"].forEach((value) => {
+  gender.className = "input-organic";
+  [["male", "Мужской"], ["female", "Женский"]].forEach(([value, label]) => {
     const option = document.createElement("option");
     option.value = value;
-    option.textContent = value;
+    option.textContent = label;
     gender.append(option);
   });
 
   const age = document.createElement("input");
-  age.className = "input input-bordered w-full rounded-xl border-slate-200 bg-white";
+  age.className = "input-organic";
   age.type = "number";
   age.min = "10";
   age.max = "120";
   age.value = "24";
+  age.placeholder = "Возраст";
 
   const heightCm = document.createElement("input");
-  heightCm.className = "input input-bordered w-full rounded-xl border-slate-200 bg-white";
+  heightCm.className = "input-organic";
   heightCm.type = "number";
   heightCm.min = "80";
   heightCm.max = "250";
   heightCm.value = "170";
+  heightCm.placeholder = "Рост, см";
 
   const weightKg = document.createElement("input");
-  weightKg.className = "input input-bordered w-full rounded-xl border-slate-200 bg-white";
+  weightKg.className = "input-organic";
   weightKg.type = "number";
   weightKg.min = "20";
   weightKg.max = "400";
   weightKg.step = "0.1";
   weightKg.value = "70";
+  weightKg.placeholder = "Вес, кг";
 
   const goal = document.createElement("select");
-  goal.className = "select select-bordered w-full rounded-xl border-slate-200 bg-white";
-  ["lose_weight", "maintain", "gain_weight"].forEach((value) => {
+  goal.className = "input-organic";
+  [["lose_weight", "Снижение веса"], ["maintain", "Поддержание"], ["gain_weight", "Набор массы"]].forEach(([value, label]) => {
     const option = document.createElement("option");
     option.value = value;
-    if (value === "lose_weight") option.textContent = "Снижение веса";
-    if (value === "maintain") option.textContent = "Поддержание";
-    if (value === "gain_weight") option.textContent = "Набор массы";
+    option.textContent = label;
     goal.append(option);
   });
 
@@ -1361,7 +1666,7 @@ function renderOnboardingScreen() {
     createFormField({ label: "Цель", input: goal }),
   );
 
-  const submit = createPrimaryButton("Сохранить", () => {
+  const submit = createPrimaryButton("Начать →", () => {
     submitOnboarding({
       gender: gender.value,
       age: Number(age.value),
@@ -1383,95 +1688,15 @@ function renderMainScreen() {
   const root = createRoot();
   root.append(createDailySummaryCard());
 
+  // Upload zone
   const uploader = document.createElement("section");
-  uploader.className = "rounded-2xl bg-white p-5 shadow-sm";
+  uploader.className = "fade-up d2";
 
   const remaining = state.usage?.remaining ?? state.subscription?.remainingToday ?? 0;
   const isLimitExhausted = remaining <= 0;
 
-  const ctaText = document.createElement("p");
-  ctaText.className = "mb-3 text-sm text-slate-600";
-  ctaText.textContent = isLimitExhausted
-    ? "Оформите Premium, чтобы продолжить"
-    : "Сфотографируйте блюдо и получите оценку за несколько секунд";
-
-  const descriptionCard = document.createElement("details");
-  descriptionCard.className = "mb-4 rounded-2xl bg-slate-50 p-4";
-  descriptionCard.open = state.mealDescriptionExpanded;
-  descriptionCard.addEventListener("toggle", () => {
-    state.mealDescriptionExpanded = descriptionCard.open;
-  });
-
-  const descriptionSummary = document.createElement("summary");
-  descriptionSummary.className = "cursor-pointer text-sm font-semibold text-slate-800";
-  descriptionSummary.textContent = "Описание блюда (необязательно)";
-
-  const helper = document.createElement("p");
-  helper.className = "mt-3 text-xs leading-relaxed text-slate-600";
-  helper.textContent = "Если блюдо многосоставное... Это повысит точность анализа.";
-
-  const textarea = document.createElement("textarea");
-  textarea.className = "mt-3 min-h-24 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-lime-400 focus:ring-2 focus:ring-lime-100";
-  textarea.placeholder = "Например: гречка + курица...";
-  textarea.value = state.mealDescription;
-  textarea.maxLength = MEAL_DESCRIPTION_MAX_LENGTH;
-
-  const descriptionFooter = document.createElement("div");
-  descriptionFooter.className = "mt-2 flex items-center justify-between gap-2";
-
-  const descriptionError = document.createElement("p");
-  descriptionError.className = "text-xs font-medium text-rose-600";
-
-  const counter = document.createElement("p");
-  counter.className = "ml-auto text-xs text-slate-500";
-
-  function syncDescriptionMeta() {
-    const length = textarea.value.length;
-    const error = validateMealDescription(textarea.value) || state.mealDescriptionError;
-    counter.textContent = `${length}/${MEAL_DESCRIPTION_MAX_LENGTH}`;
-
-    if (error) {
-      textarea.classList.add("border-rose-300", "ring-2", "ring-rose-100");
-      textarea.classList.remove("border-slate-200");
-      descriptionError.textContent = error;
-    } else {
-      textarea.classList.remove("border-rose-300", "ring-2", "ring-rose-100");
-      textarea.classList.add("border-slate-200");
-      descriptionError.textContent = "";
-    }
-  }
-
-  textarea.addEventListener("input", () => {
-    state.mealDescription = textarea.value;
-    state.mealDescriptionError = validateMealDescription(state.mealDescription);
-    syncDescriptionMeta();
-  });
-
-  syncDescriptionMeta();
-  descriptionFooter.append(descriptionError, counter);
-  descriptionCard.append(descriptionSummary, helper, textarea, descriptionFooter);
-
-  const uploadButton = createPrimaryButton(isLimitExhausted ? "Лимит исчерпан" : "Загрузить фото", () => {
-    const currentDescriptionError = validateMealDescription(state.mealDescription);
-    if (currentDescriptionError) {
-      state.mealDescriptionError = currentDescriptionError;
-      state.mealDescriptionExpanded = true;
-      render();
-      return;
-    }
-    state.mealDescriptionError = "";
-    fileInput.click();
-  }, {
-    disabled: state.busy || state.analyzing || isLimitExhausted,
-    loading: state.analyzing,
-    icon: "camera",
-  });
-  if (isLimitExhausted) {
-    uploadButton.classList.add("btn-disabled");
-  }
-
   const fileInput = document.createElement("input");
-  fileInput.className = "hidden";
+  fileInput.style.display = "none";
   fileInput.type = "file";
   fileInput.accept = "image/*";
   fileInput.capture = "environment";
@@ -1481,18 +1706,150 @@ function renderMainScreen() {
     event.target.value = "";
   });
 
-  uploader.append(ctaText, descriptionCard, uploadButton, fileInput);
-
-  if (isLimitExhausted && state.subscription?.status !== "active") {
-    const paywallLink = document.createElement("button");
-    paywallLink.type = "button";
-    paywallLink.className = "mt-3 text-sm font-medium text-violet-700 underline decoration-violet-200 underline-offset-4";
-    paywallLink.textContent = "Открыть Premium";
-    paywallLink.addEventListener("click", () => {
+  if (isLimitExhausted) {
+    // Show paywall banner instead of upload zone
+    const banner = document.createElement("div");
+    banner.className = "premium-gate-card";
+    banner.innerHTML = `
+      <div class="premium-gate-badge">✦ PREMIUM</div>
+      <p class="premium-gate-title">Лимит исчерпан</p>
+      <p style="font-size:0.8125rem;color:rgba(255,255,255,0.55);margin-top:0.375rem;position:relative;">
+        Оформите Premium, чтобы продолжить — до 20 фото в день
+      </p>
+      <div class="premium-gate-price" style="margin-top:0.875rem;">
+        <span class="premium-gate-price-old">1499 ₽</span>
+        <span class="premium-gate-price-current">499 ₽</span>
+        <span class="premium-gate-price-period">/ 30 дней</span>
+      </div>`;
+    const bannerBtn = document.createElement("button");
+    bannerBtn.type = "button";
+    bannerBtn.style.cssText = "margin-top:1rem;width:100%;padding:0.75rem;background:rgba(255,255,255,0.18);border:1px solid rgba(255,255,255,0.3);border-radius:var(--r-md);font-family:'DM Sans',sans-serif;font-size:0.875rem;font-weight:600;color:white;cursor:pointer;position:relative;";
+    bannerBtn.textContent = "Получить Premium";
+    bannerBtn.addEventListener("click", () => {
       state.screen = "paywall";
       render();
     });
-    uploader.append(paywallLink);
+    banner.append(bannerBtn);
+    uploader.append(banner);
+  } else {
+    // Upload zone
+    const zone = document.createElement("div");
+    zone.className = "upload-zone";
+    zone.setAttribute("role", "button");
+    zone.tabIndex = 0;
+
+    const iconBox = document.createElement("div");
+    iconBox.className = "upload-icon-box";
+    iconBox.textContent = "📷";
+
+    const uploadTitle = document.createElement("p");
+    uploadTitle.className = "upload-title";
+    uploadTitle.textContent = "Сфотографируйте блюдо";
+
+    const uploadSub = document.createElement("p");
+    uploadSub.className = "upload-sub";
+    uploadSub.textContent = "Оценка калорий и БЖУ за пару секунд";
+
+    zone.append(iconBox, uploadTitle, uploadSub);
+    zone.addEventListener("click", () => {
+      const currentDescriptionError = validateMealDescription(state.mealDescription);
+      if (currentDescriptionError) {
+        state.mealDescriptionError = currentDescriptionError;
+        state.mealDescriptionExpanded = true;
+        render();
+        return;
+      }
+      state.mealDescriptionError = "";
+      fileInput.click();
+    });
+    zone.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") zone.click(); });
+
+    // Description panel
+    const descriptionCard = document.createElement("details");
+    descriptionCard.className = "description-panel";
+    descriptionCard.open = state.mealDescriptionExpanded;
+    descriptionCard.addEventListener("toggle", () => {
+      state.mealDescriptionExpanded = descriptionCard.open;
+    });
+
+    const descriptionSummary = document.createElement("summary");
+    descriptionSummary.textContent = "Описание блюда (необязательно)";
+
+    const descriptionBody = document.createElement("div");
+    descriptionBody.className = "description-panel-body";
+
+    const helper = document.createElement("p");
+    helper.style.cssText = "font-size:0.75rem;color:var(--bark);opacity:0.5;line-height:1.5;";
+    helper.textContent = "Помогает повысить точность анализа. Напишите состав, если блюдо сложное.";
+
+    const textarea = document.createElement("textarea");
+    textarea.className = "description-textarea" + (state.mealDescriptionError ? " description-textarea--error" : "");
+    textarea.placeholder = "Например: гречка с курицей, оливковое масло";
+    textarea.value = state.mealDescription;
+    textarea.maxLength = MEAL_DESCRIPTION_MAX_LENGTH;
+
+    const descriptionFooter = document.createElement("div");
+    descriptionFooter.className = "description-footer";
+
+    const descriptionError = document.createElement("p");
+    descriptionError.className = "description-error";
+    descriptionError.textContent = state.mealDescriptionError || "";
+
+    const counter = document.createElement("p");
+    counter.className = "description-counter";
+    counter.textContent = `${state.mealDescription.length}/${MEAL_DESCRIPTION_MAX_LENGTH}`;
+
+    function syncDescriptionMeta() {
+      const length = textarea.value.length;
+      const error = validateMealDescription(textarea.value) || state.mealDescriptionError;
+      counter.textContent = `${length}/${MEAL_DESCRIPTION_MAX_LENGTH}`;
+      if (error) {
+        textarea.classList.add("description-textarea--error");
+        descriptionError.textContent = error;
+      } else {
+        textarea.classList.remove("description-textarea--error");
+        descriptionError.textContent = "";
+      }
+    }
+
+    textarea.addEventListener("input", () => {
+      state.mealDescription = textarea.value;
+      state.mealDescriptionError = validateMealDescription(state.mealDescription);
+      syncDescriptionMeta();
+    });
+
+    syncDescriptionMeta();
+    descriptionFooter.append(descriptionError, counter);
+    descriptionBody.append(helper, textarea, descriptionFooter);
+    descriptionCard.append(descriptionSummary, descriptionBody);
+
+    uploader.append(zone, descriptionCard);
+  }
+
+  uploader.append(fileInput);
+
+  // Main CTA button (only if not limit exhausted)
+  if (!isLimitExhausted) {
+    const uploadBtn = createPrimaryButton(
+      state.analyzing ? "Анализируем..." : "Загрузить фото",
+      () => {
+        const currentDescriptionError = validateMealDescription(state.mealDescription);
+        if (currentDescriptionError) {
+          state.mealDescriptionError = currentDescriptionError;
+          state.mealDescriptionExpanded = true;
+          render();
+          return;
+        }
+        state.mealDescriptionError = "";
+        fileInput.click();
+      },
+      {
+        disabled: state.busy || state.analyzing,
+        loading: state.analyzing,
+        icon: "camera",
+      },
+    );
+    uploader.append(uploadBtn);
   }
 
   root.append(uploader);
@@ -1500,16 +1857,14 @@ function renderMainScreen() {
   if (state.usage) {
     root.append(createQuotaLabel(state.usage));
   }
-  if (state.subscription) {
-    root.append(createSubscriptionHint(state.subscription));
-  }
 
+  // Actions grid
   const actions = document.createElement("div");
-  actions.className = "grid grid-cols-1 gap-3";
+  actions.className = "action-grid fade-up d3";
   actions.append(
     createSecondaryButton("История", openHistory, { disabled: state.busy, icon: "history" }),
-    createSecondaryButton("Недельный отчет", () => openAnalyticsScreen("weeklyReport"), { disabled: state.busy }),
-    createSecondaryButton("Месячный отчет", () => openAnalyticsScreen("monthlyReport"), { disabled: state.busy }),
+    createSecondaryButton("Отчет за неделю", () => openAnalyticsScreen("weeklyReport"), { disabled: state.busy }),
+    createSecondaryButton("Отчет за месяц", () => openAnalyticsScreen("monthlyReport"), { disabled: state.busy }),
     createSecondaryButton("Почему вес стоит", () => openAnalyticsScreen("whyNotLosing"), { disabled: state.busy }),
     createSecondaryButton("График веса", () => openAnalyticsScreen("weightChart"), { disabled: state.busy }),
     createSecondaryButton("Подписка", async () => {
@@ -1524,7 +1879,7 @@ function renderMainScreen() {
         render();
       }
     }, { disabled: state.busy, icon: "crown" }),
-    createSecondaryButton("Поделиться прогрессом", openShareScreen, { disabled: state.busy, icon: "share" }),
+    createSecondaryButton("Поделиться", openShareScreen, { disabled: state.busy, icon: "share" }),
     createSecondaryButton("Выйти", () => {
       clearSession();
       state.screen = "auth";
@@ -1549,7 +1904,7 @@ function renderResultScreen(source = "last") {
 
   if (!data?.result) {
     const empty = document.createElement("p");
-    empty.className = "text-sm text-slate-600";
+    empty.className = "result-empty";
     empty.textContent = "Нет данных анализа";
     root.append(empty);
   } else {
@@ -1581,8 +1936,8 @@ function renderHistoryScreen() {
 
 function createAnalyticsLoadingCard() {
   const card = document.createElement("section");
-  card.className = "rounded-2xl bg-white p-5 shadow-sm text-sm text-slate-600";
-  card.textContent = "Загружаем данные...";
+  card.className = "glass analytics-card";
+  card.innerHTML = `<p class="analytics-loading">Загружаем данные...</p>`;
   return card;
 }
 
@@ -1598,7 +1953,7 @@ function renderWeeklyReportScreen() {
   }
   if (state.analyticsError) {
     const error = document.createElement("p");
-    error.className = "text-sm text-rose-600";
+    error.className = "analytics-error";
     error.textContent = state.analyticsError;
     root.append(error);
     return root;
@@ -1609,31 +1964,31 @@ function renderWeeklyReportScreen() {
   const days = Array.isArray(report.days) ? report.days : [];
 
   const top = document.createElement("section");
-  top.className = "rounded-2xl bg-white p-5 shadow-sm";
+  top.className = "glass analytics-card fade-up d1";
   const topLabel = document.createElement("p");
-  topLabel.className = "text-xs text-slate-500";
+  topLabel.className = "analytics-label";
   topLabel.textContent = "Недельный итог";
   const topValue = document.createElement("p");
-  topValue.className = "mt-2 text-3xl font-semibold text-slate-900";
+  topValue.className = "analytics-value";
   topValue.textContent = `${formatMetric(totals.deltaCalories_kcal ?? 0)} ккал`;
   const topHint = document.createElement("p");
-  topHint.className = "mt-2 text-sm text-slate-600";
+  topHint.className = "analytics-hint";
   topHint.textContent = "Баланс за 7 дней";
   top.append(topLabel, topValue, topHint);
   root.append(top);
 
   const list = document.createElement("section");
-  list.className = "rounded-2xl bg-white p-4 shadow-sm";
+  list.className = "glass analytics-card fade-up d2";
   for (const day of days) {
     const row = document.createElement("div");
-    row.className = "flex items-center justify-between border-b border-slate-100 py-2 last:border-none";
+    row.className = "analytics-row";
 
     const date = document.createElement("span");
-    date.className = "text-sm text-slate-600";
+    date.className = "analytics-row-label";
     date.textContent = formatDayDate(day.date);
 
     const value = document.createElement("span");
-    value.className = "text-sm font-semibold text-slate-900";
+    value.className = "analytics-row-value";
     value.textContent = `${formatMetric(day.deltaCalories_kcal ?? 0)} ккал`;
 
     row.append(date, value);
@@ -1656,7 +2011,7 @@ function renderMonthlyReportScreen() {
   }
   if (state.analyticsError) {
     const error = document.createElement("p");
-    error.className = "text-sm text-rose-600";
+    error.className = "analytics-error";
     error.textContent = state.analyticsError;
     root.append(error);
     return root;
@@ -1666,20 +2021,20 @@ function renderMonthlyReportScreen() {
   const aggregates = report.aggregates || {};
 
   const card = document.createElement("section");
-  card.className = "rounded-2xl bg-white p-5 shadow-sm";
+  card.className = "glass analytics-card fade-up d1";
   const monthLabel = document.createElement("p");
-  monthLabel.className = "text-xs text-slate-500";
+  monthLabel.className = "analytics-label";
   monthLabel.textContent = `Месячный отчет ${report.month || ""}`;
   const monthValue = document.createElement("p");
-  monthValue.className = "mt-2 text-3xl font-semibold text-slate-900";
+  monthValue.className = "analytics-value";
   monthValue.textContent = `${formatMetric(aggregates.avgCaloriesPerDay ?? 0, 1)} ккал`;
   const monthHint = document.createElement("p");
-  monthHint.className = "mt-2 text-sm text-slate-600";
+  monthHint.className = "analytics-hint";
   monthHint.textContent = "Среднее в день";
   card.append(monthLabel, monthValue, monthHint);
 
   const grid = document.createElement("div");
-  grid.className = "mt-4 grid grid-cols-2 gap-2";
+  grid.className = "analytics-grid";
   grid.append(
     createSecondaryInfo("Дефицит", `${formatMetric(aggregates.deficitDays ?? 0)} дн.`),
     createSecondaryInfo("Профицит", `${formatMetric(aggregates.surplusDays ?? 0)} дн.`),
@@ -1703,7 +2058,7 @@ function renderWhyNotLosingScreen() {
   }
   if (state.analyticsError) {
     const error = document.createElement("p");
-    error.className = "text-sm text-rose-600";
+    error.className = "analytics-error";
     error.textContent = state.analyticsError;
     root.append(error);
     return root;
@@ -1711,14 +2066,14 @@ function renderWhyNotLosingScreen() {
 
   const data = state.whyNotLosing || {};
   const summary = document.createElement("section");
-  summary.className = "rounded-2xl bg-white p-5 shadow-sm";
+  summary.className = "glass analytics-card fade-up d1";
 
   const title = document.createElement("p");
-  title.className = "text-xs text-slate-500";
+  title.className = "analytics-label";
   title.textContent = "Почему вес может стоять";
 
   const text = document.createElement("p");
-  text.className = "mt-2 text-sm leading-relaxed text-slate-800";
+  text.style.cssText = "margin-top:0.5rem;font-size:0.9375rem;color:var(--bark);line-height:1.55;";
   text.textContent = data.summary || "Нет данных для анализа.";
 
   summary.append(title, text);
@@ -1727,21 +2082,25 @@ function renderWhyNotLosingScreen() {
   const insights = Array.isArray(data.insights) ? data.insights : [];
   if (insights.length) {
     const list = document.createElement("section");
-    list.className = "rounded-2xl bg-white p-5 shadow-sm space-y-3";
+    list.className = "glass analytics-card fade-up d2";
+    list.style.display = "flex";
+    list.style.flexDirection = "column";
+    list.style.gap = "0.625rem";
+
     for (const insight of insights) {
       const item = document.createElement("article");
-      item.className = "rounded-xl border border-slate-100 bg-slate-50 p-3";
+      item.className = "insight-card";
 
       const rule = document.createElement("p");
-      rule.className = "text-[11px] font-semibold uppercase tracking-wide text-amber-700";
+      rule.className = "insight-rule";
       rule.textContent = insight.rule || "INSIGHT";
 
       const body = document.createElement("p");
-      body.className = "mt-1 text-sm text-slate-800";
+      body.className = "insight-text";
       body.textContent = insight.text || "";
 
       const rec = document.createElement("p");
-      rec.className = "mt-1 text-xs text-slate-600";
+      rec.className = "insight-rec";
       rec.textContent = insight.recommendation || "";
 
       item.append(rule, body, rec);
@@ -1751,14 +2110,15 @@ function renderWhyNotLosingScreen() {
   }
 
   const goalCard = document.createElement("section");
-  goalCard.className = "rounded-2xl bg-white p-5 shadow-sm";
+  goalCard.className = "glass analytics-card fade-up d3";
 
   const goalLabel = document.createElement("p");
-  goalLabel.className = "text-sm font-semibold text-slate-900";
+  goalLabel.style.cssText = "font-size:0.9375rem;font-weight:500;color:var(--bark);";
   goalLabel.textContent = "Дневная цель калорий";
 
   const goalHint = document.createElement("p");
-  goalHint.className = "mt-1 text-xs text-slate-500";
+  goalHint.className = "analytics-hint";
+  goalHint.style.marginBottom = "0.75rem";
   goalHint.textContent = "Изменения сохраняются в профиле";
 
   const goalInput = document.createElement("input");
@@ -1766,7 +2126,7 @@ function renderWhyNotLosingScreen() {
   goalInput.min = "1000";
   goalInput.max = "5000";
   goalInput.value = state.goalDraft || String(getDailyTarget(state.user?.profile));
-  goalInput.className = "input input-bordered mt-3 w-full rounded-xl border-slate-200 bg-white";
+  goalInput.className = "input-organic";
   goalInput.addEventListener("input", () => {
     state.goalDraft = goalInput.value;
   });
@@ -1775,7 +2135,7 @@ function renderWhyNotLosingScreen() {
     loading: state.goalSaving,
     disabled: state.goalSaving,
   });
-  saveBtn.classList.add("mt-3");
+  saveBtn.style.marginTop = "0.75rem";
 
   goalCard.append(goalLabel, goalHint, goalInput, saveBtn);
   root.append(goalCard);
@@ -1795,7 +2155,7 @@ function renderWeightChartScreen() {
   }
   if (state.analyticsError) {
     const error = document.createElement("p");
-    error.className = "text-sm text-rose-600";
+    error.className = "analytics-error";
     error.textContent = state.analyticsError;
     root.append(error);
     return root;
@@ -1804,16 +2164,17 @@ function renderWeightChartScreen() {
   const payload = state.weightChart || {};
   const items = Array.isArray(payload.items) ? payload.items : [];
   const card = document.createElement("section");
-  card.className = "weight-chart-card";
+  card.className = "weight-chart-card fade-up d1";
 
   const heading = document.createElement("p");
-  heading.className = "text-xs text-slate-500";
+  heading.className = "analytics-label";
   heading.textContent = "Динамика веса";
   card.append(heading);
 
   if (!items.length) {
     const empty = document.createElement("p");
-    empty.className = "mt-3 text-sm text-slate-600";
+    empty.className = "analytics-hint";
+    empty.style.marginTop = "0.75rem";
     empty.textContent = "Пока нет данных веса.";
     card.append(empty);
     root.append(card);
@@ -1837,10 +2198,11 @@ function renderWeightChartScreen() {
   card.append(svg);
 
   const foot = document.createElement("p");
-  foot.className = "mt-3 text-xs text-slate-500";
+  foot.className = "analytics-hint";
+  foot.style.marginTop = "0.75rem";
   const first = items[0];
   const last = items[items.length - 1];
-  foot.textContent = `${formatDayDate(first?.date)}: ${formatMetric(first?.weight, 1)} кг -> ${formatDayDate(last?.date)}: ${formatMetric(last?.weight, 1)} кг`;
+  foot.textContent = `${formatDayDate(first?.date)}: ${formatMetric(first?.weight, 1)} кг → ${formatDayDate(last?.date)}: ${formatMetric(last?.weight, 1)} кг`;
   card.append(foot);
 
   root.append(card);
@@ -1855,77 +2217,17 @@ function renderPaywallScreen() {
 
   const root = createRoot();
 
-  const card = document.createElement("section");
-  card.className = "rounded-2xl bg-white p-5 shadow-md";
-
-  const offerTag = document.createElement("p");
-  offerTag.className = "inline-flex w-fit rounded-full bg-violet-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-violet-700";
-  offerTag.textContent = "Premium";
-
-  const offerLine = document.createElement("p");
-  offerLine.className = "mt-3 text-lg font-semibold text-slate-900";
-  offerLine.textContent = "Откройте Premium и снимите лимиты";
-
-  const priceWrap = document.createElement("div");
-  priceWrap.className = "mt-3 flex items-end gap-2";
-
-  const oldPrice = document.createElement("span");
-  oldPrice.className = "text-lg font-semibold text-slate-400 line-through";
-  oldPrice.textContent = "1499 ₽";
-
-  const currentPrice = document.createElement("span");
-  currentPrice.className = "text-4xl font-extrabold tracking-tight text-emerald-600";
-  currentPrice.textContent = "499 ₽";
-
-  const period = document.createElement("span");
-  period.className = "pb-1 text-sm font-medium text-slate-500";
-  period.textContent = "/ 30 дней";
-
-  priceWrap.append(oldPrice, currentPrice, period);
-
-  const benefits = document.createElement("ul");
-  benefits.className = "mt-5 space-y-2";
-  [
-    "До 20 фото в день вместо 2",
-    "Более точное распознавание продуктов",
-    "Быстрая оценка калорий и БЖУ",
-    "Удобнее вести питание каждый день",
-    "История анализов всегда под рукой",
-  ].forEach((line) => {
-    const item = document.createElement("li");
-    item.className = "flex items-start gap-2 text-sm text-slate-700";
-
-    const marker = document.createElement("span");
-    marker.className = "mt-1 inline-flex h-2 w-2 shrink-0 rounded-full bg-violet-300";
-
-    const text = document.createElement("span");
-    text.textContent = line;
-
-    item.append(marker, text);
-    benefits.append(item);
-  });
-
-  const footnote = document.createElement("p");
-  footnote.className = "mt-4 text-xs text-slate-500";
-  footnote.textContent = "Лимит Premium: 20 фото в день.";
-
-  card.append(offerTag, offerLine, priceWrap, benefits, footnote);
-
-  const paidBanner = document.createElement("div");
-  paidBanner.className = "mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-700";
-  paidBanner.textContent = "Уже оплатили? Нажмите кнопку ниже, чтобы обновить статус подписки.";
-  card.append(paidBanner);
-  root.append(card);
-
-  const upgradeButton = createPrimaryButton("Получить Premium за 499 ₽", handleUpgrade, {
-    disabled: state.busy,
-    loading: state.busy,
-    icon: "crown",
-  });
-  upgradeButton.classList.add("h-14", "text-base", "font-bold", "shadow-sm");
+  root.append(createPremiumGateCard({
+    onCta: handleUpgrade,
+    note: "Лимит Premium: 20 фото в день. Без авторекуррентных платежей.",
+  }));
 
   root.append(
-    upgradeButton,
+    createPrimaryButton("Получить Premium за 499 ₽", handleUpgrade, {
+      disabled: state.busy,
+      loading: state.busy,
+      icon: "crown",
+    }),
     createSecondaryButton("Я уже оплатил(а)", async () => {
       if (state.busy) {
         return;
@@ -1946,29 +2248,28 @@ function renderSubscriptionScreen() {
   ensureReminderState();
 
   const sub = state.subscription || {};
+  const isActive = sub.status === "active";
+
   const card = document.createElement("section");
-  card.className = "rounded-2xl bg-white p-5 shadow-sm";
+  card.className = "glass analytics-card fade-up d1";
 
   const badge = document.createElement("div");
-  const isActive = sub.status === "active";
-  badge.className = isActive
-    ? "mb-4 inline-flex w-fit rounded-full bg-violet-100 px-3 py-1 text-xs font-medium text-violet-700"
-    : "mb-4 inline-flex w-fit rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600";
-  badge.textContent = isActive ? "Premium активен" : `Статус: ${sub.status || "free"}`;
+  badge.className = isActive ? "sub-status-badge sub-status-badge--active" : "sub-status-badge sub-status-badge--free";
+  badge.textContent = isActive ? "✦ Premium активен" : `Статус: ${sub.status || "free"}`;
 
   const grid = document.createElement("div");
-  grid.className = "grid grid-cols-2 gap-2";
+  grid.className = "analytics-grid";
   grid.append(
-    createSecondaryInfo("Активна до", sub.activeUntil ? new Date(sub.activeUntil).toLocaleString("ru-RU") : "-"),
+    createSecondaryInfo("Активна до", sub.activeUntil ? new Date(sub.activeUntil).toLocaleDateString("ru-RU") : "-"),
     createSecondaryInfo("Стоимость", "499 ₽ / 30 дней"),
-    createSecondaryInfo("Лимит", `${sub.dailyLimit ?? 0}`),
+    createSecondaryInfo("Лимит", `${sub.dailyLimit ?? 0} фото/день`),
     createSecondaryInfo("Использовано", `${sub.usedToday ?? 0}`),
     createSecondaryInfo("Осталось", `${sub.remainingToday ?? 0}`),
   );
 
   card.append(badge, grid);
-
   root.append(card);
+
   if (!isPremiumActive()) {
     root.append(createPremiumGateCard({
       onCta: handleUpgrade,
@@ -1976,41 +2277,46 @@ function renderSubscriptionScreen() {
     }));
   } else {
     const reminders = document.createElement("section");
-    reminders.className = "rounded-2xl bg-white p-5 shadow-sm";
+    reminders.className = "glass analytics-card fade-up d2";
 
     const remindersTitle = document.createElement("p");
-    remindersTitle.className = "text-sm font-semibold text-slate-900";
+    remindersTitle.className = "analytics-label";
+    remindersTitle.style.marginBottom = "0.75rem";
     remindersTitle.textContent = "Уведомления";
 
     const remindersRow = document.createElement("label");
-    remindersRow.className = "mt-3 flex items-start justify-between gap-3";
+    remindersRow.style.cssText = "display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;cursor:pointer;";
 
     const remindersText = document.createElement("div");
 
     const remindersLabel = document.createElement("p");
-    remindersLabel.className = "text-sm text-slate-800";
+    remindersLabel.style.cssText = "font-size:0.9375rem;font-weight:500;color:var(--bark);";
     remindersLabel.textContent = "Напоминать о прогрессе";
 
     const remindersHelper = document.createElement("p");
-    remindersHelper.className = "mt-1 text-xs text-slate-500";
+    remindersHelper.className = "analytics-hint";
     remindersHelper.textContent = "Раз в день вечером, если прогресс низкий";
 
     remindersText.append(remindersLabel, remindersHelper);
 
-    const remindersToggle = document.createElement("input");
-    remindersToggle.type = "checkbox";
-    remindersToggle.className = "toggle toggle-success mt-0.5";
-    remindersToggle.checked = Boolean(state.reminderEnabled);
-    remindersToggle.disabled = state.reminderSaving || state.busy;
-    remindersToggle.addEventListener("change", (event) => {
-      handleReminderToggle(event.target.checked);
+    // Custom organic toggle
+    const toggleTrack = document.createElement("div");
+    const isEnabled = Boolean(state.reminderEnabled);
+    toggleTrack.className = `reminder-toggle-track${isEnabled ? " reminder-toggle-track--on" : ""}`;
+    const toggleThumb = document.createElement("div");
+    toggleThumb.className = "reminder-toggle-thumb";
+    toggleTrack.append(toggleThumb);
+    toggleTrack.addEventListener("click", () => {
+      if (!state.reminderSaving && !state.busy) {
+        handleReminderToggle(!state.reminderEnabled);
+      }
     });
 
-    remindersRow.append(remindersText, remindersToggle);
+    remindersRow.append(remindersText, toggleTrack);
     reminders.append(remindersTitle, remindersRow);
 
     const toneGroup = document.createElement("fieldset");
-    toneGroup.className = "mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3";
+    toneGroup.style.cssText = "margin-top:1rem;border:1px solid rgba(255,255,255,0.6);border-radius:var(--r-md);padding:0.75rem;background:rgba(255,255,255,0.35);";
 
     const toneOptions = [
       { value: "soft", label: "Мягкий стиль" },
@@ -2021,13 +2327,13 @@ function renderSubscriptionScreen() {
 
     for (const option of toneOptions) {
       const toneRow = document.createElement("label");
-      toneRow.className = "flex items-center gap-2 py-1.5 text-sm text-slate-800";
+      toneRow.style.cssText = "display:flex;align-items:center;gap:0.625rem;padding:0.375rem 0;font-size:0.875rem;color:var(--bark);cursor:pointer;";
 
       const toneInput = document.createElement("input");
       toneInput.type = "radio";
       toneInput.name = "notification-tone";
       toneInput.value = option.value;
-      toneInput.className = "radio radio-sm radio-success";
+      toneInput.style.accentColor = "var(--sage)";
       toneInput.checked = selectedTone === option.value;
       toneInput.disabled = state.reminderSaving || state.busy;
       toneInput.addEventListener("change", () => {
@@ -2044,20 +2350,23 @@ function renderSubscriptionScreen() {
     }
 
     const toneHelper = document.createElement("p");
-    toneHelper.className = "mt-2 text-xs text-slate-500";
+    toneHelper.className = "analytics-hint";
+    toneHelper.style.marginTop = "0.5rem";
     toneHelper.textContent = "Определяет тон сообщений в Telegram";
 
     reminders.append(toneGroup, toneHelper);
 
     if (state.reminderSaving) {
       const savingLabel = document.createElement("p");
-      savingLabel.className = "mt-3 text-xs text-slate-500";
+      savingLabel.className = "analytics-hint";
+      savingLabel.style.marginTop = "0.625rem";
       savingLabel.textContent = "Сохраняем...";
       reminders.append(savingLabel);
     }
 
     root.append(reminders);
   }
+
   root.append(createSecondaryButton("Обновить статус", async () => {
     setBusy(true);
     try {
@@ -2136,7 +2445,7 @@ function ensureToastMount() {
   }
   const toast = document.createElement("div");
   toast.id = "toast";
-  toast.className = "alert toast-base toast-hidden alert-error";
+  toast.className = "toast-base toast-hidden alert-error";
   toast.hidden = true;
   document.body.append(toast);
 }
@@ -2151,23 +2460,23 @@ function restoreScroll(screen) {
 function createScreenLoader() {
   const loader = document.createElement("div");
   loader.id = "app-screen-loader";
-  loader.className = "fixed right-4 top-4 z-40 rounded-full border border-slate-200 bg-white/90 p-2 shadow-sm";
-  const spinner = document.createElement("span");
-  spinner.className = "loading loading-spinner loading-sm text-lime-500";
+  loader.className = "screen-loader";
+  const spinner = document.createElement("div");
+  spinner.className = "screen-loader-spinner";
   loader.append(spinner);
   return loader;
 }
 
 function createSecondaryInfo(label, value) {
   const box = document.createElement("div");
-  box.className = "rounded-xl border border-slate-100 bg-white p-3";
+  box.className = "info-box";
 
   const l = document.createElement("div");
-  l.className = "text-xs text-slate-500";
+  l.className = "info-box-label";
   l.textContent = label;
 
   const v = document.createElement("div");
-  v.className = "mt-1 text-sm font-medium text-slate-700";
+  v.className = "info-box-value";
   v.textContent = value;
 
   box.append(l, v);
@@ -2191,7 +2500,7 @@ function goBackFromHeader() {
 
 function createMainHeaderActions() {
   const actions = document.createElement("div");
-  actions.className = "flex items-center gap-2";
+  actions.style.cssText = "display:flex;align-items:center;gap:0.5rem;";
 
   if (state.streak) {
     actions.append(createStreakBadge(state.streak, openStreakModal));
@@ -2208,6 +2517,10 @@ function getHeaderMeta(screen) {
       return { title: "Анкета", subtitle: "Нужно заполнить один раз" };
     case "result":
       return { title: "Результат", subtitle: "Оценка по фото" };
+    case "analysisAdjust":
+      return { title: "Уточните вес", subtitle: "Шаг 2 из 2" };
+    case "analysisSummary":
+      return { title: "Итог анализа", subtitle: "Расчёт по вашим данным" };
     case "history":
       return { title: "История", subtitle: "Последние приемы пищи" };
     case "historyDetail":
@@ -2274,6 +2587,12 @@ function render() {
       break;
     case "result":
       screenNode = renderResultScreen("last");
+      break;
+    case "analysisAdjust":
+      screenNode = renderAnalysisAdjustScreen();
+      break;
+    case "analysisSummary":
+      screenNode = renderAnalysisSummaryScreen();
       break;
     case "history":
       screenNode = renderHistoryScreen();

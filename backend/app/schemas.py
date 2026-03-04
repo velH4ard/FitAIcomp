@@ -384,3 +384,41 @@ class WeightChartItem(BaseModel):
 
 class WeightChartResponse(BaseModel):
     items: List[WeightChartItem]
+
+
+class Step1ItemNutrition(BaseModel):
+    calories_kcal: float = Field(..., ge=0)
+    protein_g: float = Field(..., ge=0)
+    fat_g: float = Field(..., ge=0)
+    carbs_g: float = Field(..., ge=0)
+
+
+class Step1ResponseItem(BaseModel):
+    clientItemId: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1)
+    matchType: Literal["exact", "fuzzy", "unknown"]
+    confidence: float = Field(..., ge=0, le=1)
+    nutritionPer100g: Step1ItemNutrition
+    defaultWeightG: Optional[float] = Field(default=None, gt=0)
+    warnings: List[str] = Field(default_factory=list)
+
+
+class AnalysisStep1Response(BaseModel):
+    analysisSessionId: UUID
+    recognized: bool
+    overallConfidence: float = Field(..., ge=0, le=1)
+    items: List[Step1ResponseItem]
+    warnings: List[str] = Field(default_factory=list)
+    expiresAt: datetime
+
+
+class AnalysisStep2RequestItem(BaseModel):
+    clientItemId: str = Field(..., min_length=1)
+    weight_g: float = Field(..., gt=0, le=3000)
+    adjustedName: Optional[str] = Field(default=None, min_length=1, max_length=120)
+
+
+class AnalysisStep2Request(BaseModel):
+    analysisSessionId: UUID
+    mealTime: Literal["breakfast", "lunch", "dinner", "snack", "unknown"] = "unknown"
+    items: List[AnalysisStep2RequestItem] = Field(..., min_length=1, max_length=20)
