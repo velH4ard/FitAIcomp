@@ -8,7 +8,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Need to set up path to import app modules
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Local dev: backend/scripts/ -> backend/ (has app/)
+# Docker:    /app/backend/scripts/ -> /app/ (has app/)
+_script_dir = Path(__file__).resolve().parent
+sys.path.insert(0, str(_script_dir.parent))          # local: backend/
+sys.path.insert(0, str(_script_dir.parent.parent))    # docker: /app/
 
 # Load .env
 env_path = Path(__file__).resolve().parent.parent.parent / '.env'
