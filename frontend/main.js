@@ -2181,7 +2181,48 @@ function getHeaderMeta(screen) {
       return { title: "Открыть Premium", subtitle: "Больше фото, меньше ограничений" };
     case "subscription":
       return { title: "Подписка", subtitle: "Текущий статус" };
-    undefined
+    case "share":
+      return { title: "Поделиться", subtitle: "Карточка прогресса" };
+    case "loading":
+      return { title: "FitAI", subtitle: "Загрузка..." };
+    case "main":
+    default:
+      return { title: "FitAI", subtitle: "Фото -> калории за пару секунд" };
+  }
+}
+
+function renderHeader(screen) {
+  if (!appHeader) {
+    return;
+  }
+
+  const { title, subtitle } = getHeaderMeta(screen);
+  const isMain = screen === "main";
+  const left = isMain ? null : createHeaderBackButton(goBackFromHeader);
+  const right = isMain ? createMainHeaderActions() : null;
+
+  appHeader.innerHTML = "";
+  appHeader.append(createHeaderShell({ title, subtitle, left, right }));
+}
+
+function render() {
+  if (!app || !appHeader || !appContent) {
+    return;
+  }
+  ensureToastMount();
+  const previousScreen = state.currentScreen || state.screen;
+  state.scrollByScreen[previousScreen] = window.scrollY;
+  appContent.innerHTML = "";
+  document.getElementById("app-screen-loader")?.remove();
+  document.querySelector(".streak-modal-overlay")?.remove();
+
+  renderHeader(state.screen);
+
+  let screenNode;
+  switch (state.screen) {
+    case "auth":
+      screenNode = renderAuthScreen();
+      break;
     case "onboarding":
       screenNode = renderOnboardingScreen();
       break;
@@ -2208,9 +2249,6 @@ function getHeaderMeta(screen) {
       break;
     case "subscription":
       screenNode = renderSubscriptionScreen();
-      break;
-    case "weightChart":
-      screenNode = renderWeightChartScreen();
       break;
     case "share":
       screenNode = renderShareScreen();
