@@ -56,6 +56,7 @@ const appContent = document.getElementById("app-content");
 const SHARE_PATH = "/share";
 const STORAGE_TOKEN_KEY = "fitai.accessToken";
 const STORAGE_PENDING_PAYMENT_KEY = "fitai.pendingPaymentId";
+const STORAGE_TG_INITDATA_KEY = "fitai.telegramInitData";
 const MEAL_DESCRIPTION_MAX_LENGTH = 500;
 const APP_ENV = import.meta.env.VITE_APP_ENV ?? import.meta.env.MODE;
 const IS_DEV = APP_ENV !== "production";
@@ -274,7 +275,57 @@ function syncTelegramBackButton() {
 }
 
 function getTelegramInitData() {
-  return tgWebApp?.initData || "";
+  const fromWebApp = tgWebApp?.initData || window.Telegram?.WebApp?.initData || "";
+  if (fromWebApp) {
+    try {
+      sessionStorage.setItem(STORAGE_TG_INITDATA_KEY, fromWebApp);
+    } catch (_error) {
+      // ignore storage errors
+    }
+    return fromWebApp;
+  }
+
+  const readParam = (rawValue) => {
+    if (!rawValue) {
+      return "";
+    }
+    try {
+      return decodeURIComponent(rawValue);
+    } catch (_error) {
+      return rawValue;
+    }
+  };
+
+  const searchParams = new URLSearchParams(window.location.search || "");
+  const fromSearch = readParam(searchParams.get("tgWebAppData") || searchParams.get("initData"));
+  if (fromSearch) {
+    try {
+      sessionStorage.setItem(STORAGE_TG_INITDATA_KEY, fromSearch);
+    } catch (_error) {
+      // ignore storage errors
+    }
+    return fromSearch;
+  }
+
+  const hashRaw = window.location.hash?.startsWith("#")
+    ? window.location.hash.slice(1)
+    : (window.location.hash || "");
+  const hashParams = new URLSearchParams(hashRaw);
+  const fromHash = readParam(hashParams.get("tgWebAppData") || hashParams.get("initData"));
+  if (fromHash) {
+    try {
+      sessionStorage.setItem(STORAGE_TG_INITDATA_KEY, fromHash);
+    } catch (_error) {
+      // ignore storage errors
+    }
+    return fromHash;
+  }
+
+  try {
+    return sessionStorage.getItem(STORAGE_TG_INITDATA_KEY) || "";
+  } catch (_error) {
+    return "";
+  }
 }
 
 function notifyTelegramAppReady() {
@@ -900,6 +951,7 @@ async function bootstrapAuth(options = {}) {
   }
 
   authFlowPromise = (async () => {
+  notifyTelegramAppReady();
   const initData = getTelegramInitData();
   if (!initData) {
     clearSession();
