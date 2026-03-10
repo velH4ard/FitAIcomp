@@ -275,7 +275,32 @@ function syncTelegramBackButton() {
   tgWebApp.BackButton.hide();
 }
 
-function getTelegramInitData() {
+function extractAuthDateFromInitData(initData) {
+  const raw = String(initData || "").trim();
+  if (!raw) {
+    return null;
+  }
+
+  const params = new URLSearchParams(raw);
+  const authDateRaw = params.get("auth_date");
+  const authDate = Number(authDateRaw);
+  if (!Number.isFinite(authDate) || authDate <= 0) {
+    return null;
+  }
+  return authDate;
+}
+
+function isInitDataFresh(initData, maxAgeSeconds = 60 * 60 * 24) {
+  const authDate = extractAuthDateFromInitData(initData);
+  if (!authDate) {
+    return false;
+  }
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  return nowSeconds - authDate <= maxAgeSeconds;
+}
+
+function getTelegramInitData(options = {}) {
+  const { allowCached = true } = options;
   const fromWebApp = tgWebApp?.initData || window.Telegram?.WebApp?.initData || "";
   if (fromWebApp) {
     try {
@@ -322,11 +347,33 @@ function getTelegramInitData() {
     return fromHash;
   }
 
+  if (!allowCached) {
+    return "";
+  }
+
   try {
-    return sessionStorage.getItem(STORAGE_TG_INITDATA_KEY) || "";
+    const cached = sessionStorage.getItem(STORAGE_TG_INITDATA_KEY) || "";
+    if (cached && isInitDataFresh(cached, 60 * 10)) {
+      return cached;
+    }
+    return "";
   } catch (_error) {
     return "";
   }
+}
+
+async function waitForTelegramInitData(maxWaitMs = 2000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < maxWaitMs) {
+    const initData = getTelegramInitData({ allowCached: false });
+    if (initData) {
+      return initData;
+    }
+    await new Promise((resolve) => {
+      window.setTimeout(resolve, 120);
+    });
+  }
+  return getTelegramInitData({ allowCached: true });
 }
 
 function notifyTelegramAppReady() {
@@ -953,7 +1000,7 @@ async function bootstrapAuth(options = {}) {
 
   authFlowPromise = (async () => {
   notifyTelegramAppReady();
-  const initData = getTelegramInitData();
+  const initData = await waitForTelegramInitData();
   if (!initData) {
     clearSession();
     state.authErrorMessage = "";
@@ -975,6 +1022,16 @@ async function bootstrapAuth(options = {}) {
     await bootstrapUser();
     return true;
   } catch (error) {
+    if (
+      error instanceof ApiError
+      && (error.code === "AUTH_INVALID_INITDATA" || error.code === "AUTH_EXPIRED_INITDATA")
+    ) {
+      try {
+        sessionStorage.removeItem(STORAGE_TG_INITDATA_KEY);
+      } catch (_removeError) {
+        // ignore storage errors
+      }
+    }
     clearSession();
     nextAutoAuthAttemptAt = Date.now() + AUTH_RETRY_COOLDOWN_MS;
     state.authErrorMessage = "Ошибка авторизации. Откройте приложение через Telegram.";
