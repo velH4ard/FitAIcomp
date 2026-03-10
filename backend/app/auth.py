@@ -1,8 +1,8 @@
 import hashlib
 import hmac
 import json
-import time
 import secrets
+import time
 from typing import Optional, Dict, Any
 from urllib.parse import parse_qsl
 
@@ -10,6 +10,32 @@ from jose import jwt, JWTError
 from .config import settings
 
 from .errors import FitAIError
+
+
+def _build_telegram_data_check_string(values: Dict[str, str]) -> str:
+    return "\n".join(f"{key}={value}" for key, value in sorted(values.items()))
+
+
+def _compute_telegram_hash(data_check_string: str, bot_token: str) -> str:
+    secret_key = hmac.new(
+        b"WebAppData",
+        bot_token.strip().encode(),
+        hashlib.sha256,
+    ).digest()
+    return hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+
+
+def _is_valid_telegram_signature(data_check_string: str, received_hash: str) -> bool:
+    tokens = [settings.BOT_TOKEN.strip()]
+    fallback_token = settings.TELEGRAM_BOT_TOKEN.strip()
+    if fallback_token and fallback_token not in tokens:
+        tokens.append(fallback_token)
+
+    for token in tokens:
+        computed_hash = _compute_telegram_hash(data_check_string, token)
+        if secrets.compare_digest(computed_hash, received_hash):
+            return True
+    return False
 
 def verify_telegram_init_data(init_data: str) -> Dict[str, Any]:
     """
@@ -19,7 +45,7 @@ def verify_telegram_init_data(init_data: str) -> Dict[str, Any]:
     try:
         vals = dict(parse_qsl(init_data, keep_blank_values=True))
         if "hash" not in vals:
-            print("Auth failed", flush=True); raise FitAIError(
+            raise FitAIError(
                 code="AUTH_INVALID_INITDATA",
                 message="Некорректные данные Telegram",
                 status_code=401,
@@ -28,26 +54,10 @@ def verify_telegram_init_data(init_data: str) -> Dict[str, Any]:
         
         received_hash = vals.pop("hash")
         
-        # 1. Data Check String
-        data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(vals.items()))
-        
-        # 2. Secret Key Derivation
-        secret_key = hmac.new(
-            b"WebAppData", 
-            settings.BOT_TOKEN.strip().encode(), 
-            hashlib.sha256
-        ).digest()
-        
-        # 3. Hash Calculation
-        computed_hash = hmac.new(
-            secret_key, 
-            data_check_string.encode(), 
-            hashlib.sha256
-        ).hexdigest()
-        
-        # 4. Comparison
-        if not secrets.compare_digest(computed_hash, received_hash):
-            print("Auth failed", flush=True); raise FitAIError(
+        data_check_string = _build_telegram_data_check_string(vals)
+
+        if not _is_valid_telegram_signature(data_check_string, received_hash):
+            raise FitAIError(
                 code="AUTH_INVALID_INITDATA",
                 message="Некорректные данные Telegram",
                 status_code=401,
@@ -57,7 +67,7 @@ def verify_telegram_init_data(init_data: str) -> Dict[str, Any]:
         # 5. Freshness Check
         auth_date = int(vals.get("auth_date", 0))
         if (time.time() - auth_date) > settings.get_telegram_initdata_max_age_sec():
-            print("Auth failed", flush=True); raise FitAIError(
+            raise FitAIError(
                 code="AUTH_EXPIRED_INITDATA",
                 message="Сессия Telegram истекла",
                 status_code=401,
@@ -66,7 +76,7 @@ def verify_telegram_init_data(init_data: str) -> Dict[str, Any]:
         # Extract user data
         user_str = vals.get("user")
         if not user_str:
-            print("Auth failed", flush=True); raise FitAIError(
+            raise FitAIError(
                 code="AUTH_INVALID_INITDATA",
                 message="Некорректные данные Telegram",
                 status_code=401,
@@ -77,7 +87,7 @@ def verify_telegram_init_data(init_data: str) -> Dict[str, Any]:
     except FitAIError:
         raise
     except Exception:
-        print("Auth failed", flush=True); raise FitAIError(
+        raise FitAIError(
             code="AUTH_INVALID_INITDATA",
             message="Некорректные данные Telegram",
             status_code=401,
