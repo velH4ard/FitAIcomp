@@ -271,6 +271,9 @@ function syncTelegramBackButton() {
   if (!tgWebApp?.BackButton) {
     return;
   }
+  if (typeof tgWebApp.isVersionAtLeast === "function" && !tgWebApp.isVersionAtLeast("6.1")) {
+    return;
+  }
   tgWebApp.BackButton.offClick(leaveShareScreen);
   tgWebApp.BackButton.hide();
 }
@@ -1013,14 +1016,12 @@ async function bootstrapAuth(options = {}) {
   state.loadingText = "Авторизация...";
   state.screen = "loading";
   render();
-  setBusy(true);
   try {
     const response = await authTelegram(initData);
     saveToken(response.accessToken);
     nextAutoAuthAttemptAt = 0;
     notifyTelegramAppReady();
-    await bootstrapUser();
-    return true;
+    return await bootstrapUser();
   } catch (error) {
     if (
       error instanceof ApiError
@@ -1034,13 +1035,18 @@ async function bootstrapAuth(options = {}) {
     }
     clearSession();
     nextAutoAuthAttemptAt = Date.now() + AUTH_RETRY_COOLDOWN_MS;
-    state.authErrorMessage = "Ошибка авторизации. Откройте приложение через Telegram.";
+    if (error instanceof ApiError && (error.code === "AUTH_INVALID_INITDATA" || error.code === "AUTH_EXPIRED_INITDATA")) {
+      state.authErrorMessage = "Ошибка авторизации. Откройте приложение через Telegram.";
+    } else if (error instanceof ApiError && (error.code === "NETWORK" || error.code === "NETWORK_ERROR")) {
+      state.authErrorMessage = "Нет соединения с сервером. Попробуйте снова.";
+    } else {
+      state.authErrorMessage = "Не удалось загрузить данные. Попробуйте снова.";
+    }
     state.screen = "auth";
     render();
     return false;
   } finally {
     state.loadingText = "Подключаемся к серверу";
-    setBusy(false);
   }
   })();
 
@@ -1055,7 +1061,7 @@ async function bootstrapUser() {
   if (!state.token) {
     state.screen = "auth";
     render();
-    return;
+    return false;
   }
 
   setBusy(true);
@@ -1075,10 +1081,14 @@ async function bootstrapUser() {
     } else {
       state.screen = "main";
     }
+    return true;
   } catch (error) {
     if (!routeByBusinessError(error)) {
-      showToast(mapFriendlyError(error));
+      showToast("Не удалось загрузить данные профиля");
+      state.authErrorMessage = "Не удалось загрузить данные. Попробуйте снова.";
+      state.screen = "auth";
     }
+    return false;
   } finally {
     setBusy(false);
     render();
