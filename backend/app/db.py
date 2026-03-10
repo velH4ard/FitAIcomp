@@ -274,7 +274,7 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_weight_logs_user_date
                     ON weight_logs (user_id, date ASC);
 
-                DO $
+                DO $$
                 BEGIN
                     IF NOT EXISTS (
                         SELECT 1
@@ -283,7 +283,7 @@ class Database:
                     ) THEN
                         ALTER TABLE weight_logs ADD CONSTRAINT weight_logs_user_id_date_key UNIQUE (user_id, date);
                     END IF;
-                END $;
+                END $$;
 
 
                 CREATE TABLE IF NOT EXISTS analyze_requests (
