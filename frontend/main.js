@@ -312,16 +312,7 @@ function getTelegramInitData(options = {}) {
     return fromWebApp;
   }
 
-  const readParam = (rawValue) => {
-    if (!rawValue) {
-      return "";
-    }
-    try {
-      return decodeURIComponent(rawValue);
-    } catch (_error) {
-      return rawValue;
-    }
-  };
+  const readParam = (rawValue) => String(rawValue || "").trim();
 
   const searchParams = new URLSearchParams(window.location.search || "");
   const fromSearch = readParam(searchParams.get("tgWebAppData") || searchParams.get("initData"));
