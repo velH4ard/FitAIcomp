@@ -17,9 +17,9 @@ def verify_telegram_init_data(init_data: str) -> Dict[str, Any]:
     Returns the user dict if valid, raises FitAIError otherwise.
     """
     try:
-        vals = dict(parse_qsl(init_data))
+        vals = dict(parse_qsl(init_data, keep_blank_values=True))
         if "hash" not in vals:
-            raise FitAIError(
+            print("Auth failed", flush=True); raise FitAIError(
                 code="AUTH_INVALID_INITDATA",
                 message="Некорректные данные Telegram",
                 status_code=401,
@@ -34,7 +34,7 @@ def verify_telegram_init_data(init_data: str) -> Dict[str, Any]:
         # 2. Secret Key Derivation
         secret_key = hmac.new(
             b"WebAppData", 
-            settings.BOT_TOKEN.encode(), 
+            settings.BOT_TOKEN.strip().encode(), 
             hashlib.sha256
         ).digest()
         
@@ -47,7 +47,7 @@ def verify_telegram_init_data(init_data: str) -> Dict[str, Any]:
         
         # 4. Comparison
         if not secrets.compare_digest(computed_hash, received_hash):
-            raise FitAIError(
+            print("Auth failed", flush=True); raise FitAIError(
                 code="AUTH_INVALID_INITDATA",
                 message="Некорректные данные Telegram",
                 status_code=401,
@@ -57,7 +57,7 @@ def verify_telegram_init_data(init_data: str) -> Dict[str, Any]:
         # 5. Freshness Check
         auth_date = int(vals.get("auth_date", 0))
         if (time.time() - auth_date) > settings.get_telegram_initdata_max_age_sec():
-            raise FitAIError(
+            print("Auth failed", flush=True); raise FitAIError(
                 code="AUTH_EXPIRED_INITDATA",
                 message="Сессия Telegram истекла",
                 status_code=401,
@@ -66,7 +66,7 @@ def verify_telegram_init_data(init_data: str) -> Dict[str, Any]:
         # Extract user data
         user_str = vals.get("user")
         if not user_str:
-            raise FitAIError(
+            print("Auth failed", flush=True); raise FitAIError(
                 code="AUTH_INVALID_INITDATA",
                 message="Некорректные данные Telegram",
                 status_code=401,
@@ -77,7 +77,7 @@ def verify_telegram_init_data(init_data: str) -> Dict[str, Any]:
     except FitAIError:
         raise
     except Exception:
-        raise FitAIError(
+        print("Auth failed", flush=True); raise FitAIError(
             code="AUTH_INVALID_INITDATA",
             message="Некорректные данные Telegram",
             status_code=401,
