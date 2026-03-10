@@ -1679,7 +1679,18 @@ function renderAuthScreen() {
   text.className = state.authErrorMessage ? "auth-error-text" : "auth-hint-text";
   text.textContent = state.authErrorMessage || "Откройте приложение через Telegram";
 
-  panel.append(icon, title, text);
+  const retryBtn = createPrimaryButton("Повторить", async () => {
+    if (state.busy) {
+      return;
+    }
+    await bootstrapAuth();
+  }, {
+    disabled: state.busy,
+    loading: state.busy,
+  });
+  retryBtn.style.marginTop = "1rem";
+
+  panel.append(icon, title, text, retryBtn);
   root.append(panel);
   return root;
 }
@@ -2380,4 +2391,15 @@ document.addEventListener("visibilitychange", () => {
 });
 
 render();
-bootstrapAuth();
+
+async function bootstrapApp() {
+  if (state.token) {
+    const loaded = await bootstrapUser();
+    if (loaded) {
+      return;
+    }
+  }
+  await bootstrapAuth();
+}
+
+bootstrapApp();
