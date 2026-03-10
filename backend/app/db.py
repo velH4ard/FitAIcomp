@@ -254,7 +254,8 @@ class Database:
                     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     date DATE NOT NULL,
                     weight_kg DOUBLE PRECISION NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE(user_id, date)
                 );
 
                 DO $$
@@ -272,6 +273,18 @@ class Database:
 
                 CREATE INDEX IF NOT EXISTS idx_weight_logs_user_date
                     ON weight_logs (user_id, date ASC);
+
+                DO $
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'weight_logs_user_id_date_key'
+                    ) THEN
+                        ALTER TABLE weight_logs ADD CONSTRAINT weight_logs_user_id_date_key UNIQUE (user_id, date);
+                    END IF;
+                END $;
+
 
                 CREATE TABLE IF NOT EXISTS analyze_requests (
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -34,6 +34,8 @@ async def mock_db_pool(monkeypatch):
                             return "OK"
                         async def fetchrow(self, query, *args):
                             return None
+                        async def fetch(self, query, *args):
+                            return []
                     return MockConn()
                 async def __aexit__(self, exc_type, exc_val, exc_tb):
                     pass

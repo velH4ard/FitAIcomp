@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from .db import fetch_named, fetchrow_named, get_db
 from .deps import get_current_user
 from .errors import FitAIError
-from .schemas import DailyNutritionSummaryResponse, WeeklyStatsDay, WeeklyStatsResponse, WeeklyStatsTotals
+from .schemas import DailyNutritionSummaryResponse, WeeklyStatsDay, WeeklyStatsResponse, WeeklyStatsTotals, WeightChartItem, WeightChartResponse, WeightLogRequest, WeightLogResponse
 
 
 router = APIRouter(prefix="/v1/stats", tags=["Stats"])
@@ -159,4 +159,100 @@ async def get_weekly_stats(
             carbs_g=totals_carbs,
             mealsCount=totals_meals_count,
         ),
+    )
+
+
+@router.get("/charts/weight", response_model=WeightChartResponse)
+async def get_weight_chart(
+    date_from: Optional[date] = Query(default=None, alias="dateFrom"),
+    date_to: Optional[date] = Query(default=None, alias="dateTo"),
+    user=Depends(get_current_user),
+    conn=Depends(get_db),
+):
+    if date_from is None and date_to is None:
+        end_date = datetime.now(timezone.utc).date()
+        start_date = end_date - timedelta(days=29)
+    else:
+        if date_from is None or date_to is None:
+            raise FitAIError(
+                code="VALIDATION_FAILED",
+                message="Некорректные данные",
+                status_code=400,
+                details={
+                    "fieldErrors": [
+                        {"field": "dateFrom", "issue": "must be provided together with dateTo"},
+                        {"field": "dateTo", "issue": "must be provided together with dateFrom"},
+                    ]
+                },
+            )
+        if date_from > date_to:
+            raise FitAIError(
+                code="VALIDATION_FAILED",
+                message="Некорректные данные",
+                status_code=400,
+                details={"fieldErrors": [{"field": "dateFrom", "issue": "must be <= dateTo"}]},
+            )
+        start_date = date_from
+        end_date = date_to
+
+    rows = await fetch_named(
+        conn,
+        "stats.weight_chart",
+        """
+        SELECT date, weight_kg
+        FROM weight_logs
+        WHERE user_id = $1
+          AND date >= $2
+          AND date <= $3
+        ORDER BY date ASC
+        """,
+        str(user["id"]),
+        start_date,
+        end_date,
+    )
+
+    items = [WeightChartItem(date=row["date"].isoformat(), weight=float(row["weight_kg"])) for row in rows]
+    return WeightChartResponse(items=items)
+
+@router.post("/weight", response_model=WeightLogResponse)
+async def log_weight(
+    payload: WeightLogRequest,
+    user=Depends(get_current_user),
+    conn=Depends(get_db),
+):
+    try:
+        log_date = date.fromisoformat(payload.date)
+    except ValueError as exc:
+        raise FitAIError(
+            code="VALIDATION_FAILED",
+            message="Некорректные данные",
+            status_code=400,
+            details={"fieldErrors": [{"field": "date", "issue": "must be YYYY-MM-DD"}]},
+        ) from exc
+        
+    weight_kg = float(payload.weightKg)
+
+    # Upsert logic to ensure 1 entry per day
+    row = await conn.fetchrow(
+        """
+        INSERT INTO weight_logs (user_id, date, weight_kg)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (user_id, date) DO UPDATE 
+        SET weight_kg = EXCLUDED.weight_kg
+        RETURNING id, user_id, date, weight_kg, created_at
+        """,
+        user["id"],
+        log_date,
+        weight_kg,
+    )
+    
+    if not row:
+        raise FitAIError(code="INTERNAL_ERROR", message="Ошибка сохранения веса", status_code=500)
+        
+    return WeightLogResponse(
+        id=row["id"],
+        userId=row["user_id"],
+        date=row["date"].isoformat(),
+        weightKg=row["weight_kg"],
+        createdAt=row["created_at"],
     )

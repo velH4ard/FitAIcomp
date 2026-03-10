@@ -7,14 +7,13 @@ import {
   getMe,
   getMealById,
   getMeals,
-  getMonthlyReport,
   getSubscription,
-  getWeeklyReport,
   getWeightChart,
-  getWhyNotLosing,
   patchNotificationSettings,
   getStatsDaily,
+  getStatsWeekly,
   getUsageToday,
+  logWeight,
   getStreak,
   analyzeMeal,
   analyzeMealStep1,
@@ -23,8 +22,8 @@ import {
   setSilentReauthHandler,
   setTokenInvalidator,
   setUnauthorizedHandler,
-  updateProfileGoal,
   updateProfile,
+  updateProfileGoal,
 } from "./api";
 import {
   createFormField,
@@ -64,9 +63,6 @@ const TOKEN_REFRESH_EARLY_MS = 5 * 60 * 1000;
 const AUTH_RETRY_COOLDOWN_MS = 30 * 1000;
 const REMINDER_TONE_DEFAULT = "balanced";
 const PREMIUM_ANALYTICS_SCREENS = new Set([
-  "weeklyReport",
-  "monthlyReport",
-  "whyNotLosing",
   "weightChart",
 ]);
 
@@ -100,15 +96,10 @@ const state = {
   reminderEnabled: null,
   reminderTone: REMINDER_TONE_DEFAULT,
   reminderSaving: false,
-  weeklyReport: null,
-  monthlyReport: null,
-  whyNotLosing: null,
   weightChart: null,
   analyticsLoading: false,
   analyticsError: "",
   premiumGateReason: "",
-  goalDraft: "",
-  goalSaving: false,
   analysisStep1: null,
   analysisDraftItems: [],
   analysisStep2Result: null,
@@ -490,7 +481,38 @@ function toNumber(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+
+function handleAddWeight() {
+  const currentWeight = state.user?.profile?.weightKg || 70;
+  const newVal = window.prompt("Введите текущий вес (кг):", currentWeight);
+  if (!newVal) return;
+  const parsed = parseFloat(newVal.replace(',', '.'));
+  if (isNaN(parsed) || parsed < 20 || parsed > 400) {
+    showToast("Пожалуйста, введите корректный вес (от 20 до 400 кг)");
+    return;
+  }
+  
+  setBusy(true);
+  render();
+  
+
+    logWeight(formatDateForApi(new Date()), parsed)
+      .then(() => {
+        showToast("Вес сохранен!", "info");
+        if (!state.user.profile) state.user.profile = {};
+        state.user.profile.weightKg = parsed;
+        return updateProfile(state.user.profile);
+      })
+      .then(() => refreshAfterResume())
+      .catch((err) => showToast(mapFriendlyError(err)))
+      .finally(() => {
+        setBusy(false);
+        render();
+      });
+}
+
 function getDailyTarget(profile) {
+  if (profile?.dailyGoal) return profile.dailyGoal;
   const targets = {
     lose_weight: 1800,
     maintain: 2200,
@@ -743,7 +765,46 @@ function createDailySummaryCard() {
 
   const subLabel = document.createElement("p");
   subLabel.className = "daily-card-sub";
-  subLabel.textContent = `из ${target.toLocaleString("ru-RU")} целевых · осталось ${remaining.toLocaleString("ru-RU")}`;
+  subLabel.style.display = "flex";
+  subLabel.style.alignItems = "center";
+  subLabel.style.gap = "0.25rem";
+  subLabel.innerHTML = `<span>из ${target.toLocaleString("ru-RU")} целевых</span>`;
+  
+  const editGoalBtn = document.createElement("button");
+  editGoalBtn.type = "button";
+  editGoalBtn.className = "btn-icon-only";
+  editGoalBtn.style.cssText = "width: 1.5rem; height: 1.5rem; opacity: 0.6; padding: 0; background: none; border: none; cursor: pointer; color: var(--bark);";
+  editGoalBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:0.875rem;height:0.875rem;"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>`;
+  editGoalBtn.onclick = () => {
+    const newVal = window.prompt("Введите новую дневную цель (ккал):", target);
+    if (!newVal) return;
+    const parsed = parseInt(newVal, 10);
+    if (isNaN(parsed) || parsed < 1000 || parsed > 5000) {
+      showToast("Пожалуйста, введите число от 1000 до 5000");
+      return;
+    }
+    
+    setBusy(true);
+    render();
+    updateProfileGoal(parsed)
+      .then((res) => {
+        // Update local user profile goal override
+        if (!state.user.profile) state.user.profile = {};
+        // Storing it in a way getDailyTarget can read it if we adjust it
+        state.user.profile.dailyGoal = res.dailyGoal;
+        showToast("Цель обновлена", "info");
+      })
+      .catch((err) => showToast(mapFriendlyError(err)))
+      .finally(() => {
+        setBusy(false);
+        render();
+      });
+  };
+  
+  subLabel.append(editGoalBtn);
+  const remainingSpan = document.createElement("span");
+  remainingSpan.textContent = ` · осталось ${remaining.toLocaleString("ru-RU")}`;
+  subLabel.append(remainingSpan);
 
   // Row: ring + macros
   const row = document.createElement("div");
@@ -771,12 +832,17 @@ function createDailySummaryCard() {
   const macros = document.createElement("div");
   macros.className = "daily-macros";
 
+  
   const protein = Math.round(state.dailyStats?.protein_g ?? 0);
   const fat = Math.round(state.dailyStats?.fat_g ?? 0);
   const carbs = Math.round(state.dailyStats?.carbs_g ?? 0);
-  const proteinTarget = 120;
-  const fatTarget = 80;
-  const carbsTarget = 250;
+  
+  // Dynamic macro recalculation based on daily goal
+  // Assuming standard ratio: 30% protein, 30% fat, 40% carbs
+  const proteinTarget = Math.round((target * 0.3) / 4);
+  const fatTarget = Math.round((target * 0.3) / 9);
+  const carbsTarget = Math.round((target * 0.4) / 4);
+
 
   for (const [label, val, tgt, color] of [
     ["Белки", protein, proteinTarget, "var(--sage)"],
@@ -1414,74 +1480,6 @@ async function openMeal(mealId) {
   }
 }
 
-async function openAnalyticsScreen(screen) {
-  state.analyticsError = "";
-  state.premiumGateReason = "";
-  state.screen = screen;
-
-  if (!isPremiumActive()) {
-    render();
-    return;
-  }
-
-  state.analyticsLoading = true;
-  render();
-
-  try {
-    if (screen === "weeklyReport") {
-      state.weeklyReport = await getWeeklyReport();
-    }
-    if (screen === "monthlyReport") {
-      state.monthlyReport = await getMonthlyReport();
-    }
-    if (screen === "whyNotLosing") {
-      state.whyNotLosing = await getWhyNotLosing();
-      const fromPayload = Number(state.whyNotLosing?.dailyGoalKcal ?? state.whyNotLosing?.dailyGoal ?? state.whyNotLosing?.goalCalories_kcal);
-      if (Number.isFinite(fromPayload) && fromPayload > 0) {
-        state.goalDraft = String(Math.round(fromPayload));
-      } else if (!state.goalDraft) {
-        state.goalDraft = String(getDailyTarget(state.user?.profile));
-      }
-    }
-    if (screen === "weightChart") {
-      state.weightChart = await getWeightChart();
-    }
-  } catch (error) {
-    if (error instanceof ApiError && error.code === "PAYWALL_BLOCKED") {
-      state.premiumGateReason = "Для этой функции нужен активный Premium.";
-    } else {
-      state.analyticsError = mapFriendlyError(error);
-    }
-  } finally {
-    state.analyticsLoading = false;
-    render();
-  }
-}
-
-async function saveGoalFromWhyNotLosing() {
-  if (!isPremiumActive() || state.goalSaving) {
-    return;
-  }
-  const nextGoal = Number.parseInt(String(state.goalDraft || ""), 10);
-  if (!Number.isInteger(nextGoal)) {
-    showToast("Введите корректную цель в ккал");
-    return;
-  }
-
-  state.goalSaving = true;
-  render();
-  try {
-    const response = await updateProfileGoal(nextGoal);
-    state.goalDraft = String(response?.dailyGoal ?? nextGoal);
-    showToast("Цель обновлена", "info");
-  } catch (error) {
-    showToast(mapFriendlyError(error));
-  } finally {
-    state.goalSaving = false;
-    render();
-  }
-}
-
 async function handleUpgrade() {
   setBusy(true);
   try {
@@ -1858,15 +1856,182 @@ function renderMainScreen() {
     root.append(createQuotaLabel(state.usage));
   }
 
+  // ===== Charts Section =====
+  if (state.weeklyStats && state.weeklyStats.days && state.weeklyStats.days.length > 0) {
+    const calCard = document.createElement("section");
+    calCard.className = "glass fade-up d3";
+    calCard.style.padding = "1.25rem";
+    calCard.style.marginTop = "1rem";
+    
+    const calHeader = document.createElement("div");
+    calHeader.style.display = "flex";
+    calHeader.style.justifyContent = "space-between";
+    calHeader.style.alignItems = "baseline";
+    calHeader.style.marginBottom = "1rem";
+    
+    const calTitle = document.createElement("p");
+    calTitle.className = "analytics-label";
+    calTitle.textContent = "Калории за неделю";
+    
+    const calSub = document.createElement("p");
+    calSub.style.fontSize = "0.75rem";
+    calSub.style.color = "var(--bark)";
+    calSub.style.opacity = "0.6";
+    calSub.textContent = "ккал/день";
+    
+    calHeader.append(calTitle, calSub);
+    calCard.append(calHeader);
+    
+    const chartWrap = document.createElement("div");
+    chartWrap.style.display = "flex";
+    chartWrap.style.alignItems = "flex-end";
+    chartWrap.style.justifyContent = "space-between";
+    chartWrap.style.height = "100px";
+    chartWrap.style.gap = "4px";
+    
+    const days = state.weeklyStats.days;
+    const maxCal = Math.max(1, ...days.map(d => d.calories_kcal || 0));
+    const goalCal = getDailyTarget(state.user?.profile) || 2000;
+    const chartMax = Math.max(maxCal, goalCal * 1.2); // Give some headroom above goal
+    
+    days.forEach(day => {
+      const col = document.createElement("div");
+      col.style.display = "flex";
+      col.style.flexDirection = "column";
+      col.style.alignItems = "center";
+      col.style.flex = "1";
+      col.style.gap = "4px";
+      
+      const barWrapBox = document.createElement("div");
+      barWrapBox.style.position = "relative";
+      barWrapBox.style.width = "100%";
+      barWrapBox.style.height = "100%";
+      barWrapBox.style.display = "flex";
+      barWrapBox.style.alignItems = "flex-end";
+      barWrapBox.style.justifyContent = "center";
+      barWrapBox.style.borderRadius = "4px";
+      barWrapBox.style.backgroundColor = "rgba(0,0,0,0.03)";
+      
+      const val = day.calories_kcal || 0;
+      const pct = (val / chartMax) * 100;
+      
+      const bar = document.createElement("div");
+      bar.style.width = "100%";
+      bar.style.maxWidth = "24px";
+      bar.style.height = `${pct}%`;
+      bar.style.backgroundColor = val > goalCal ? "var(--clay)" : "var(--sage)";
+      bar.style.borderRadius = "4px";
+      bar.style.transition = "height 0.3s ease";
+      
+      barWrapBox.append(bar);
+      
+      const lbl = document.createElement("span");
+      lbl.style.fontSize = "0.625rem";
+      lbl.style.color = "var(--bark)";
+      lbl.style.opacity = "0.6";
+      const dateObj = new Date(day.date);
+      const dayNames = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
+      lbl.textContent = dayNames[dateObj.getDay()];
+      
+      col.append(barWrapBox, lbl);
+      chartWrap.append(col);
+    });
+    
+    calCard.append(chartWrap);
+    root.append(calCard);
+  }
+
+  // Weight Chart
+  if (state.weightChart && state.weightChart.items && state.weightChart.items.length > 0) {
+    const weightCard = document.createElement("section");
+    weightCard.className = "glass fade-up d3";
+    weightCard.style.padding = "1.25rem";
+    weightCard.style.marginTop = "1rem";
+    
+    const weightHeader = document.createElement("div");
+    weightHeader.style.display = "flex";
+    weightHeader.style.justifyContent = "space-between";
+    weightHeader.style.alignItems = "baseline";
+    weightHeader.style.marginBottom = "1rem";
+    
+    const weightTitle = document.createElement("p");
+    weightTitle.className = "analytics-label";
+    weightTitle.textContent = "Динамика веса";
+    
+    const weightAddBtn = document.createElement("button");
+    weightAddBtn.type = "button";
+    weightAddBtn.className = "btn-icon-only";
+    weightAddBtn.style.cssText = "padding: 0.25rem 0.5rem; background: var(--sage); color: white; border: none; border-radius: 4px; font-size: 0.75rem; font-weight: 500; cursor: pointer;";
+    weightAddBtn.textContent = "+ Вес";
+    weightAddBtn.onclick = () => handleAddWeight();
+    
+    weightHeader.append(weightTitle, weightAddBtn);
+    weightCard.append(weightHeader);
+    
+    const items = state.weightChart.items;
+    
+    const width = 320;
+    const height = 100;
+    const padding = 10;
+    const path = buildChartPath(items, width, height, padding);
+    
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    svg.style.width = "100%";
+    svg.style.height = "auto";
+    svg.style.overflow = "visible";
+    
+    const poly = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    poly.setAttribute("d", path);
+    poly.setAttribute("fill", "none");
+    poly.setAttribute("stroke", "var(--sage)");
+    poly.setAttribute("stroke-width", "3");
+    poly.setAttribute("stroke-linecap", "round");
+    poly.setAttribute("stroke-linejoin", "round");
+    
+    svg.append(poly);
+    weightCard.append(svg);
+    
+    const foot = document.createElement("p");
+    foot.className = "analytics-hint";
+    foot.style.marginTop = "0.75rem";
+    const first = items[0];
+    const last = items[items.length - 1];
+    foot.textContent = `${formatDayDate(first?.date)}: ${formatMetric(first?.weight, 1)} кг → ${formatDayDate(last?.date)}: ${formatMetric(last?.weight, 1)} кг`;
+    weightCard.append(foot);
+    
+    root.append(weightCard);
+  } else {
+    // Empty state for weight
+    const weightCard = document.createElement("section");
+    weightCard.className = "glass fade-up d3";
+    weightCard.style.padding = "1.25rem";
+    weightCard.style.marginTop = "1rem";
+    weightCard.style.display = "flex";
+    weightCard.style.justifyContent = "space-between";
+    weightCard.style.alignItems = "center";
+    
+    const weightTitle = document.createElement("p");
+    weightTitle.className = "analytics-label";
+    weightTitle.textContent = "Динамика веса";
+    
+    const weightAddBtn = document.createElement("button");
+    weightAddBtn.type = "button";
+    weightAddBtn.className = "btn-icon-only";
+    weightAddBtn.style.cssText = "padding: 0.25rem 0.5rem; background: var(--sage); color: white; border: none; border-radius: 4px; font-size: 0.75rem; font-weight: 500; cursor: pointer;";
+    weightAddBtn.textContent = "+ Внести первый вес";
+    weightAddBtn.onclick = () => handleAddWeight();
+    
+    weightCard.append(weightTitle, weightAddBtn);
+    root.append(weightCard);
+  }
+
   // Actions grid
   const actions = document.createElement("div");
   actions.className = "action-grid fade-up d3";
   actions.append(
     createSecondaryButton("История", openHistory, { disabled: state.busy, icon: "history" }),
-    createSecondaryButton("Отчет за неделю", () => openAnalyticsScreen("weeklyReport"), { disabled: state.busy }),
-    createSecondaryButton("Отчет за месяц", () => openAnalyticsScreen("monthlyReport"), { disabled: state.busy }),
-    createSecondaryButton("Почему вес стоит", () => openAnalyticsScreen("whyNotLosing"), { disabled: state.busy }),
-    createSecondaryButton("График веса", () => openAnalyticsScreen("weightChart"), { disabled: state.busy }),
+    
     createSecondaryButton("Подписка", async () => {
       setBusy(true);
       try {
@@ -1939,483 +2104,6 @@ function createAnalyticsLoadingCard() {
   card.className = "glass analytics-card";
   card.innerHTML = `<p class="analytics-loading">Загружаем данные...</p>`;
   return card;
-}
-
-function renderWeeklyReportScreen() {
-  if (!isPremiumActive() || state.premiumGateReason) {
-    return createPremiumGateSection(state.premiumGateReason);
-  }
-
-  const root = createRoot();
-  if (state.analyticsLoading) {
-    root.append(createAnalyticsLoadingCard());
-    return root;
-  }
-  if (state.analyticsError) {
-    const error = document.createElement("p");
-    error.className = "analytics-error";
-    error.textContent = state.analyticsError;
-    root.append(error);
-    return root;
-  }
-
-  const report = state.weeklyReport || {};
-  const totals = report.totals || {};
-  const days = Array.isArray(report.days) ? report.days : [];
-
-  const top = document.createElement("section");
-  top.className = "glass analytics-card fade-up d1";
-  const topLabel = document.createElement("p");
-  topLabel.className = "analytics-label";
-  topLabel.textContent = "Недельный итог";
-  const topValue = document.createElement("p");
-  topValue.className = "analytics-value";
-  topValue.textContent = `${formatMetric(totals.deltaCalories_kcal ?? 0)} ккал`;
-  const topHint = document.createElement("p");
-  topHint.className = "analytics-hint";
-  topHint.textContent = "Баланс за 7 дней";
-  top.append(topLabel, topValue, topHint);
-  root.append(top);
-
-  const list = document.createElement("section");
-  list.className = "glass analytics-card fade-up d2";
-  for (const day of days) {
-    const row = document.createElement("div");
-    row.className = "analytics-row";
-
-    const date = document.createElement("span");
-    date.className = "analytics-row-label";
-    date.textContent = formatDayDate(day.date);
-
-    const value = document.createElement("span");
-    value.className = "analytics-row-value";
-    value.textContent = `${formatMetric(day.deltaCalories_kcal ?? 0)} ккал`;
-
-    row.append(date, value);
-    list.append(row);
-  }
-  root.append(list);
-
-  return root;
-}
-
-function renderMonthlyReportScreen() {
-  if (!isPremiumActive() || state.premiumGateReason) {
-    return createPremiumGateSection(state.premiumGateReason);
-  }
-
-  const root = createRoot();
-  if (state.analyticsLoading) {
-    root.append(createAnalyticsLoadingCard());
-    return root;
-  }
-  if (state.analyticsError) {
-    const error = document.createElement("p");
-    error.className = "analytics-error";
-    error.textContent = state.analyticsError;
-    root.append(error);
-    return root;
-  }
-
-  const report = state.monthlyReport || {};
-  const aggregates = report.aggregates || {};
-
-  const card = document.createElement("section");
-  card.className = "glass analytics-card fade-up d1";
-  const monthLabel = document.createElement("p");
-  monthLabel.className = "analytics-label";
-  monthLabel.textContent = `Месячный отчет ${report.month || ""}`;
-  const monthValue = document.createElement("p");
-  monthValue.className = "analytics-value";
-  monthValue.textContent = `${formatMetric(aggregates.avgCaloriesPerDay ?? 0, 1)} ккал`;
-  const monthHint = document.createElement("p");
-  monthHint.className = "analytics-hint";
-  monthHint.textContent = "Среднее в день";
-  card.append(monthLabel, monthValue, monthHint);
-
-  const grid = document.createElement("div");
-  grid.className = "analytics-grid";
-  grid.append(
-    createSecondaryInfo("Дефицит", `${formatMetric(aggregates.deficitDays ?? 0)} дн.`),
-    createSecondaryInfo("Профицит", `${formatMetric(aggregates.surplusDays ?? 0)} дн.`),
-    createSecondaryInfo("Дней с трекингом", `${formatMetric(aggregates.trackedDays ?? 0)}`),
-    createSecondaryInfo("Дельта", `${formatMetric(aggregates.deltaCalories_kcal ?? 0)} ккал`),
-  );
-  card.append(grid);
-  root.append(card);
-  return root;
-}
-
-function renderWhyNotLosingScreen() {
-  if (!isPremiumActive() || state.premiumGateReason) {
-    return createPremiumGateSection(state.premiumGateReason);
-  }
-
-  const root = createRoot();
-  if (state.analyticsLoading) {
-    root.append(createAnalyticsLoadingCard());
-    return root;
-  }
-  if (state.analyticsError) {
-    const error = document.createElement("p");
-    error.className = "analytics-error";
-    error.textContent = state.analyticsError;
-    root.append(error);
-    return root;
-  }
-
-  const data = state.whyNotLosing || {};
-  const summary = document.createElement("section");
-  summary.className = "glass analytics-card fade-up d1";
-
-  const title = document.createElement("p");
-  title.className = "analytics-label";
-  title.textContent = "Почему вес может стоять";
-
-  const text = document.createElement("p");
-  text.style.cssText = "margin-top:0.5rem;font-size:0.9375rem;color:var(--bark);line-height:1.55;";
-  text.textContent = data.summary || "Нет данных для анализа.";
-
-  summary.append(title, text);
-  root.append(summary);
-
-  const insights = Array.isArray(data.insights) ? data.insights : [];
-  if (insights.length) {
-    const list = document.createElement("section");
-    list.className = "glass analytics-card fade-up d2";
-    list.style.display = "flex";
-    list.style.flexDirection = "column";
-    list.style.gap = "0.625rem";
-
-    for (const insight of insights) {
-      const item = document.createElement("article");
-      item.className = "insight-card";
-
-      const rule = document.createElement("p");
-      rule.className = "insight-rule";
-      rule.textContent = insight.rule || "INSIGHT";
-
-      const body = document.createElement("p");
-      body.className = "insight-text";
-      body.textContent = insight.text || "";
-
-      const rec = document.createElement("p");
-      rec.className = "insight-rec";
-      rec.textContent = insight.recommendation || "";
-
-      item.append(rule, body, rec);
-      list.append(item);
-    }
-    root.append(list);
-  }
-
-  const goalCard = document.createElement("section");
-  goalCard.className = "glass analytics-card fade-up d3";
-
-  const goalLabel = document.createElement("p");
-  goalLabel.style.cssText = "font-size:0.9375rem;font-weight:500;color:var(--bark);";
-  goalLabel.textContent = "Дневная цель калорий";
-
-  const goalHint = document.createElement("p");
-  goalHint.className = "analytics-hint";
-  goalHint.style.marginBottom = "0.75rem";
-  goalHint.textContent = "Изменения сохраняются в профиле";
-
-  const goalInput = document.createElement("input");
-  goalInput.type = "number";
-  goalInput.min = "1000";
-  goalInput.max = "5000";
-  goalInput.value = state.goalDraft || String(getDailyTarget(state.user?.profile));
-  goalInput.className = "input-organic";
-  goalInput.addEventListener("input", () => {
-    state.goalDraft = goalInput.value;
-  });
-
-  const saveBtn = createPrimaryButton("Сохранить цель", saveGoalFromWhyNotLosing, {
-    loading: state.goalSaving,
-    disabled: state.goalSaving,
-  });
-  saveBtn.style.marginTop = "0.75rem";
-
-  goalCard.append(goalLabel, goalHint, goalInput, saveBtn);
-  root.append(goalCard);
-
-  return root;
-}
-
-function renderWeightChartScreen() {
-  if (!isPremiumActive() || state.premiumGateReason) {
-    return createPremiumGateSection(state.premiumGateReason);
-  }
-
-  const root = createRoot();
-  if (state.analyticsLoading) {
-    root.append(createAnalyticsLoadingCard());
-    return root;
-  }
-  if (state.analyticsError) {
-    const error = document.createElement("p");
-    error.className = "analytics-error";
-    error.textContent = state.analyticsError;
-    root.append(error);
-    return root;
-  }
-
-  const payload = state.weightChart || {};
-  const items = Array.isArray(payload.items) ? payload.items : [];
-  const card = document.createElement("section");
-  card.className = "weight-chart-card fade-up d1";
-
-  const heading = document.createElement("p");
-  heading.className = "analytics-label";
-  heading.textContent = "Динамика веса";
-  card.append(heading);
-
-  if (!items.length) {
-    const empty = document.createElement("p");
-    empty.className = "analytics-hint";
-    empty.style.marginTop = "0.75rem";
-    empty.textContent = "Пока нет данных веса.";
-    card.append(empty);
-    root.append(card);
-    return root;
-  }
-
-  const width = 320;
-  const height = 180;
-  const padding = 20;
-  const path = buildChartPath(items, width, height, padding);
-
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-  svg.setAttribute("class", "weight-chart-svg");
-
-  const poly = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  poly.setAttribute("d", path);
-  poly.setAttribute("class", "weight-chart-line");
-
-  svg.append(poly);
-  card.append(svg);
-
-  const foot = document.createElement("p");
-  foot.className = "analytics-hint";
-  foot.style.marginTop = "0.75rem";
-  const first = items[0];
-  const last = items[items.length - 1];
-  foot.textContent = `${formatDayDate(first?.date)}: ${formatMetric(first?.weight, 1)} кг → ${formatDayDate(last?.date)}: ${formatMetric(last?.weight, 1)} кг`;
-  card.append(foot);
-
-  root.append(card);
-  return root;
-}
-
-function renderPaywallScreen() {
-  if (state.subscription?.status === "active") {
-    state.screen = "main";
-    return renderMainScreen();
-  }
-
-  const root = createRoot();
-
-  root.append(createPremiumGateCard({
-    onCta: handleUpgrade,
-    note: "Лимит Premium: 20 фото в день. Без авторекуррентных платежей.",
-  }));
-
-  root.append(
-    createPrimaryButton("Получить Premium за 499 ₽", handleUpgrade, {
-      disabled: state.busy,
-      loading: state.busy,
-      icon: "crown",
-    }),
-    createSecondaryButton("Я уже оплатил(а)", async () => {
-      if (state.busy) {
-        return;
-      }
-      setBusy(true);
-      await refreshAfterResume({ notifyResult: true });
-      state.screen = state.subscription?.status === "active" ? "main" : "paywall";
-      setBusy(false);
-      render();
-    }, { disabled: state.busy, icon: "refresh" }),
-  );
-
-  return root;
-}
-
-function renderSubscriptionScreen() {
-  const root = createRoot();
-  ensureReminderState();
-
-  const sub = state.subscription || {};
-  const isActive = sub.status === "active";
-
-  const card = document.createElement("section");
-  card.className = "glass analytics-card fade-up d1";
-
-  const badge = document.createElement("div");
-  badge.className = isActive ? "sub-status-badge sub-status-badge--active" : "sub-status-badge sub-status-badge--free";
-  badge.textContent = isActive ? "✦ Premium активен" : `Статус: ${sub.status || "free"}`;
-
-  const grid = document.createElement("div");
-  grid.className = "analytics-grid";
-  grid.append(
-    createSecondaryInfo("Активна до", sub.activeUntil ? new Date(sub.activeUntil).toLocaleDateString("ru-RU") : "-"),
-    createSecondaryInfo("Стоимость", "499 ₽ / 30 дней"),
-    createSecondaryInfo("Лимит", `${sub.dailyLimit ?? 0} фото/день`),
-    createSecondaryInfo("Использовано", `${sub.usedToday ?? 0}`),
-    createSecondaryInfo("Осталось", `${sub.remainingToday ?? 0}`),
-  );
-
-  card.append(badge, grid);
-  root.append(card);
-
-  if (!isPremiumActive()) {
-    root.append(createPremiumGateCard({
-      onCta: handleUpgrade,
-      note: "Редактирование напоминаний доступно только в Premium.",
-    }));
-  } else {
-    const reminders = document.createElement("section");
-    reminders.className = "glass analytics-card fade-up d2";
-
-    const remindersTitle = document.createElement("p");
-    remindersTitle.className = "analytics-label";
-    remindersTitle.style.marginBottom = "0.75rem";
-    remindersTitle.textContent = "Уведомления";
-
-    const remindersRow = document.createElement("label");
-    remindersRow.style.cssText = "display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;cursor:pointer;";
-
-    const remindersText = document.createElement("div");
-
-    const remindersLabel = document.createElement("p");
-    remindersLabel.style.cssText = "font-size:0.9375rem;font-weight:500;color:var(--bark);";
-    remindersLabel.textContent = "Напоминать о прогрессе";
-
-    const remindersHelper = document.createElement("p");
-    remindersHelper.className = "analytics-hint";
-    remindersHelper.textContent = "Раз в день вечером, если прогресс низкий";
-
-    remindersText.append(remindersLabel, remindersHelper);
-
-    // Custom organic toggle
-    const toggleTrack = document.createElement("div");
-    const isEnabled = Boolean(state.reminderEnabled);
-    toggleTrack.className = `reminder-toggle-track${isEnabled ? " reminder-toggle-track--on" : ""}`;
-    const toggleThumb = document.createElement("div");
-    toggleThumb.className = "reminder-toggle-thumb";
-    toggleTrack.append(toggleThumb);
-    toggleTrack.addEventListener("click", () => {
-      if (!state.reminderSaving && !state.busy) {
-        handleReminderToggle(!state.reminderEnabled);
-      }
-    });
-
-    remindersRow.append(remindersText, toggleTrack);
-    reminders.append(remindersTitle, remindersRow);
-
-    const toneGroup = document.createElement("fieldset");
-    toneGroup.style.cssText = "margin-top:1rem;border:1px solid rgba(255,255,255,0.6);border-radius:var(--r-md);padding:0.75rem;background:rgba(255,255,255,0.35);";
-
-    const toneOptions = [
-      { value: "soft", label: "Мягкий стиль" },
-      { value: "balanced", label: "Баланс" },
-      { value: "hard", label: "Жесткий стиль" },
-    ];
-    const selectedTone = normalizeReminderTone(state.reminderTone) || REMINDER_TONE_DEFAULT;
-
-    for (const option of toneOptions) {
-      const toneRow = document.createElement("label");
-      toneRow.style.cssText = "display:flex;align-items:center;gap:0.625rem;padding:0.375rem 0;font-size:0.875rem;color:var(--bark);cursor:pointer;";
-
-      const toneInput = document.createElement("input");
-      toneInput.type = "radio";
-      toneInput.name = "notification-tone";
-      toneInput.value = option.value;
-      toneInput.style.accentColor = "var(--sage)";
-      toneInput.checked = selectedTone === option.value;
-      toneInput.disabled = state.reminderSaving || state.busy;
-      toneInput.addEventListener("change", () => {
-        if (toneInput.checked) {
-          handleReminderToneChange(option.value);
-        }
-      });
-
-      const toneLabel = document.createElement("span");
-      toneLabel.textContent = option.label;
-
-      toneRow.append(toneInput, toneLabel);
-      toneGroup.append(toneRow);
-    }
-
-    const toneHelper = document.createElement("p");
-    toneHelper.className = "analytics-hint";
-    toneHelper.style.marginTop = "0.5rem";
-    toneHelper.textContent = "Определяет тон сообщений в Telegram";
-
-    reminders.append(toneGroup, toneHelper);
-
-    if (state.reminderSaving) {
-      const savingLabel = document.createElement("p");
-      savingLabel.className = "analytics-hint";
-      savingLabel.style.marginTop = "0.625rem";
-      savingLabel.textContent = "Сохраняем...";
-      reminders.append(savingLabel);
-    }
-
-    root.append(reminders);
-  }
-
-  root.append(createSecondaryButton("Обновить статус", async () => {
-    setBusy(true);
-    try {
-      state.subscription = await getSubscription();
-      await refreshUsageAndSubscription();
-    } catch (error) {
-      showToast(mapFriendlyError(error));
-    } finally {
-      setBusy(false);
-      render();
-    }
-  }, { disabled: state.busy, loading: state.busy, icon: "refresh" }));
-  return root;
-}
-
-async function openShareScreen(options = {}) {
-  const { pushRoute = true } = options;
-  if (!pushRoute) {
-    suppressNextHistoryPush = true;
-  }
-  setBusy(true);
-  try {
-    const today = getTodayUtcDate();
-    const [profile, streak, dailyStats] = await Promise.all([
-      getMe().catch(() => state.user),
-      getStreak().catch(() => ({ currentStreak: 0, bestStreak: 0, lastCompletedDate: null })),
-      getStatsDaily(today).catch(() => ({ calories_kcal: 0, protein_g: 0, fat_g: 0, carbs_g: 0, mealsCount: 0 })),
-    ]);
-
-    if (profile) {
-      state.user = profile;
-      syncReminderStateFrom(state.user);
-    }
-
-    const dailyGoal = getDailyTarget(profile?.profile || state.user?.profile) || 2000;
-
-    state.shareData = {
-      currentStreak: streak?.currentStreak ?? 0,
-      todayCalories: dailyStats?.calories_kcal ?? 0,
-      dailyGoal,
-      motivationalQuote: pickRandomQuote(QUOTES_SHARE_SHORT).text,
-    };
-    state.screen = "share";
-  } catch (error) {
-    showToast(mapFriendlyError(error));
-  } finally {
-    setBusy(false);
-    render();
-  }
 }
 
 function renderShareScreen() {
@@ -2529,56 +2217,7 @@ function getHeaderMeta(screen) {
       return { title: "Открыть Premium", subtitle: "Больше фото, меньше ограничений" };
     case "subscription":
       return { title: "Подписка", subtitle: "Текущий статус" };
-    case "weeklyReport":
-      return { title: "Недельный отчет", subtitle: "Расширенная аналитика" };
-    case "monthlyReport":
-      return { title: "Месячный отчет", subtitle: "Сводка за месяц" };
-    case "whyNotLosing":
-      return { title: "Почему вес стоит", subtitle: "Причины и рекомендации" };
-    case "weightChart":
-      return { title: "График веса", subtitle: "Тренд по дням" };
-    case "share":
-      return { title: "Поделиться", subtitle: "Карточка прогресса" };
-    case "loading":
-      return { title: "FitAI", subtitle: "Загрузка..." };
-    case "main":
-    default:
-      return { title: "FitAI", subtitle: "Фото -> калории за пару секунд" };
-  }
-}
-
-function renderHeader(screen) {
-  if (!appHeader) {
-    return;
-  }
-
-  const { title, subtitle } = getHeaderMeta(screen);
-  const isMain = screen === "main";
-  const left = isMain ? null : createHeaderBackButton(goBackFromHeader);
-  const right = isMain ? createMainHeaderActions() : null;
-
-  appHeader.innerHTML = "";
-  appHeader.append(createHeaderShell({ title, subtitle, left, right }));
-}
-
-function render() {
-  if (!app || !appHeader || !appContent) {
-    return;
-  }
-  ensureToastMount();
-  const previousScreen = state.currentScreen || state.screen;
-  state.scrollByScreen[previousScreen] = window.scrollY;
-  appContent.innerHTML = "";
-  document.getElementById("app-screen-loader")?.remove();
-  document.querySelector(".streak-modal-overlay")?.remove();
-
-  renderHeader(state.screen);
-
-  let screenNode;
-  switch (state.screen) {
-    case "auth":
-      screenNode = renderAuthScreen();
-      break;
+    undefined
     case "onboarding":
       screenNode = renderOnboardingScreen();
       break;
@@ -2605,15 +2244,6 @@ function render() {
       break;
     case "subscription":
       screenNode = renderSubscriptionScreen();
-      break;
-    case "weeklyReport":
-      screenNode = renderWeeklyReportScreen();
-      break;
-    case "monthlyReport":
-      screenNode = renderMonthlyReportScreen();
-      break;
-    case "whyNotLosing":
-      screenNode = renderWhyNotLosingScreen();
       break;
     case "weightChart":
       screenNode = renderWeightChartScreen();

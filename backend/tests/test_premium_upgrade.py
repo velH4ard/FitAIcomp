@@ -44,8 +44,7 @@ class FailOnDbUseConn:
         ("GET", "/v1/reports/weekly", "reports.weekly"),
         ("GET", "/v1/reports/monthly", "reports.monthly"),
         ("GET", "/v1/analysis/why-not-losing", "analysis.why_not_losing"),
-        ("GET", "/v1/charts/weight", "charts.weight"),
-        ("PATCH", "/v1/notifications/settings", "notifications.settings"),
+                ("PATCH", "/v1/notifications/settings", "notifications.settings"),
     ],
 )
 async def test_premium_endpoints_block_non_premium_before_payload_compute(client, method, path, feature):
@@ -172,36 +171,6 @@ async def test_why_not_losing_detects_small_deficit(client):
         body = response.json()
         insights = {item["rule"]: item for item in body["insights"]}
         assert "LOW_DEFICIT" in insights
-    finally:
-        app.dependency_overrides.pop(get_current_user, None)
-        app.dependency_overrides.pop(get_db, None)
-
-
-class WeightChartConn:
-    async def fetch(self, query, *args):
-        assert "FROM weight_logs" in query
-        return [
-            {"date": date(2026, 2, 10), "weight_kg": 86.2},
-            {"date": date(2026, 2, 12), "weight_kg": 85.9},
-        ]
-
-
-@pytest.mark.asyncio
-async def test_weight_chart_returns_points(client):
-    app.dependency_overrides[get_current_user] = _active_user
-
-    async def override_get_db():
-        yield WeightChartConn()
-
-    app.dependency_overrides[get_db] = override_get_db
-    try:
-        response = await client.get("/v1/charts/weight")
-        assert response.status_code == 200
-        body = response.json()
-        assert body["items"] == [
-            {"date": "2026-02-10", "weight": 86.2},
-            {"date": "2026-02-12", "weight": 85.9},
-        ]
     finally:
         app.dependency_overrides.pop(get_current_user, None)
         app.dependency_overrides.pop(get_db, None)

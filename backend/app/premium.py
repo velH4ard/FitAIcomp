@@ -1,9 +1,7 @@
 import calendar
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
-
 from fastapi import APIRouter, Depends, Query
-
 from .db import fetch_named, get_db
 from .deps import get_current_user
 from .errors import FitAIError
@@ -16,25 +14,15 @@ from .schemas import (
     WeeklyReportResponse,
     WeeklyReportTotals,
     WeeklyWeightForecast,
-    WeightChartItem,
-    WeightChartResponse,
     WhyNotLosingInsight,
     WhyNotLosingResponse,
 )
-
-
 router = APIRouter(prefix="/v1", tags=["Premium"])
-
-
 def _utc_today() -> date:
     return datetime.now(timezone.utc).date()
-
-
 def _resolve_goal_or_default(user: dict) -> int:
     resolved = resolve_effective_goal(user)
     return int(resolved) if resolved is not None and int(resolved) > 0 else 2000
-
-
 async def _load_daily_calories_map(conn, user_id: str, start_date: date, end_date: date) -> dict[date, float]:
     rows = await fetch_named(
         conn,
@@ -51,8 +39,6 @@ async def _load_daily_calories_map(conn, user_id: str, start_date: date, end_dat
         end_date,
     )
     return {row["date"]: float(row["calories_kcal"] or 0) for row in rows}
-
-
 @router.get("/reports/weekly", response_model=WeeklyReportResponse)
 async def get_weekly_report(
     end_date_query: Optional[date] = Query(default=None, alias="endDate"),
@@ -60,11 +46,9 @@ async def get_weekly_report(
     conn=Depends(get_db),
 ):
     ensure_premium_access(user, feature="reports.weekly")
-
     end_date = end_date_query or _utc_today()
     start_date = end_date - timedelta(days=6)
     goal = _resolve_goal_or_default(user)
-
     calories_by_date = await _load_daily_calories_map(conn, str(user["id"]), start_date, end_date)
     days: list[WeeklyReportDay] = []
     total_calories = 0.0
@@ -72,13 +56,11 @@ async def get_weekly_report(
     deficit_days = 0
     surplus_days = 0
     balanced_days = 0
-
     for offset in range(7):
         day = start_date + timedelta(days=offset)
         calories = float(calories_by_date.get(day, 0.0))
         goal_for_day = float(goal)
         delta = calories - goal_for_day
-
         if delta < 0:
             balance = "deficit"
             deficit_days += 1
@@ -88,7 +70,6 @@ async def get_weekly_report(
         else:
             balance = "balanced"
             balanced_days += 1
-
         days.append(
             WeeklyReportDay(
                 date=day.isoformat(),
@@ -100,7 +81,6 @@ async def get_weekly_report(
         )
         total_calories += calories
         total_goal += goal_for_day
-
     period_delta_kg = (total_calories - total_goal) / 7700.0
     profile = user.get("profile") if isinstance(user, dict) else {}
     projected_weight = None
@@ -111,7 +91,6 @@ async def get_weekly_report(
             projected_weight = None
     if projected_weight is None:
         projected_weight = period_delta_kg
-
     return WeeklyReportResponse(
         startDate=start_date.isoformat(),
         endDate=end_date.isoformat(),
@@ -131,8 +110,6 @@ async def get_weekly_report(
             confidence="low" if abs(period_delta_kg) < 0.5 else "medium",
         ),
     )
-
-
 @router.get("/reports/monthly", response_model=MonthlyReportResponse)
 async def get_monthly_report(
     month_query: Optional[str] = Query(default=None, alias="month"),
@@ -140,7 +117,6 @@ async def get_monthly_report(
     conn=Depends(get_db),
 ):
     ensure_premium_access(user, feature="reports.monthly")
-
     if month_query:
         try:
             year_s, month_s = month_query.split("-", 1)
@@ -157,11 +133,9 @@ async def get_monthly_report(
     else:
         today = _utc_today()
         start_date = today.replace(day=1)
-
     end_day = calendar.monthrange(start_date.year, start_date.month)[1]
     end_date = start_date.replace(day=end_day)
     goal = _resolve_goal_or_default(user)
-
     calories_by_date = await _load_daily_calories_map(conn, str(user["id"]), start_date, end_date)
     period_days = (end_date - start_date).days + 1
     daily_values = [float(calories_by_date.get(start_date + timedelta(days=offset), 0.0)) for offset in range(period_days)]
@@ -169,12 +143,10 @@ async def get_monthly_report(
     avg_calories = total_calories / float(period_days)
     total_goal = float(goal) * period_days
     delta_calories = total_calories - total_goal
-
     tracked_days = sum(1 for calories in daily_values if calories > 0)
     deficit_days = sum(1 for calories in daily_values if calories < goal)
     surplus_days = sum(1 for calories in daily_values if calories > goal)
     balanced_days = period_days - deficit_days - surplus_days
-
     weight_rows = await fetch_named(
         conn,
         "premium.monthly_weight",
@@ -193,7 +165,6 @@ async def get_monthly_report(
     start_weight = float(weight_rows[0]["weight_kg"]) if weight_rows else None
     end_weight = float(weight_rows[-1]["weight_kg"]) if weight_rows else None
     change_kg = round(end_weight - start_weight, 2) if (start_weight is not None and end_weight is not None) else None
-
     return MonthlyReportResponse(
         month=f"{start_date.year:04d}-{start_date.month:02d}",
         startDate=start_date.isoformat(),
@@ -214,8 +185,6 @@ async def get_monthly_report(
             "changeKg": change_kg,
         },
     )
-
-
 @router.get("/analysis/why-not-losing", response_model=WhyNotLosingResponse)
 async def get_why_not_losing(
     window_days: int = Query(default=14, alias="windowDays", ge=7, le=30),
@@ -223,11 +192,9 @@ async def get_why_not_losing(
     conn=Depends(get_db),
 ):
     ensure_premium_access(user, feature="analysis.why_not_losing")
-
     end_date = _utc_today()
     start_date = end_date - timedelta(days=window_days - 1)
     goal = _resolve_goal_or_default(user)
-
     rows = await fetch_named(
         conn,
         "premium.why_not_losing_window",
@@ -242,7 +209,6 @@ async def get_why_not_losing(
         start_date,
         end_date,
     )
-
     calories_by_date: dict[date, float] = {}
     logging_days = 0
     for row in rows:
@@ -251,17 +217,14 @@ async def get_why_not_losing(
         calories_by_date[row["date"]] = calories
         if meals_count > 0:
             logging_days += 1
-
     daily_values = [float(calories_by_date.get(start_date + timedelta(days=offset), 0.0)) for offset in range(window_days)]
     logged_values = [value for value in daily_values if value > 0]
     average_calories = (sum(logged_values) / float(len(logged_values))) if logged_values else 0.0
     surplus_days = sum(1 for calories in daily_values if calories > goal * 1.1)
     avg_deficit = goal - average_calories
-
     frequent_surpluses = surplus_days >= 3
     low_logging = logging_days < max(4, int(window_days * 0.6))
     low_deficit = 0 <= avg_deficit < 150
-
     insights: list[WhyNotLosingInsight] = []
     if frequent_surpluses:
         insights.append(
@@ -287,71 +250,14 @@ async def get_why_not_losing(
                 recommendation="Уменьшите дневную цель на 100-150 ккал и проверьте динамику через 7 дней.",
             )
         )
-
     summary = (
         "За выбранный период есть факторы, мешающие устойчивому снижению веса."
         if insights
         else "Критичных факторов не найдено. Продолжайте стабильный режим и регулярный учет."
     )
-
     return WhyNotLosingResponse(
         analysisType="rule_based_v1",
         windowDays=window_days,
         summary=summary,
         insights=insights,
     )
-
-
-@router.get("/charts/weight", response_model=WeightChartResponse)
-async def get_weight_chart(
-    date_from: Optional[date] = Query(default=None, alias="dateFrom"),
-    date_to: Optional[date] = Query(default=None, alias="dateTo"),
-    user=Depends(get_current_user),
-    conn=Depends(get_db),
-):
-    ensure_premium_access(user, feature="charts.weight")
-
-    if date_from is None and date_to is None:
-        end_date = _utc_today()
-        start_date = end_date - timedelta(days=29)
-    else:
-        if date_from is None or date_to is None:
-            raise FitAIError(
-                code="VALIDATION_FAILED",
-                message="Некорректные данные",
-                status_code=400,
-                details={
-                    "fieldErrors": [
-                        {"field": "dateFrom", "issue": "must be provided together with dateTo"},
-                        {"field": "dateTo", "issue": "must be provided together with dateFrom"},
-                    ]
-                },
-            )
-        if date_from > date_to:
-            raise FitAIError(
-                code="VALIDATION_FAILED",
-                message="Некорректные данные",
-                status_code=400,
-                details={"fieldErrors": [{"field": "dateFrom", "issue": "must be <= dateTo"}]},
-            )
-        start_date = date_from
-        end_date = date_to
-
-    rows = await fetch_named(
-        conn,
-        "premium.weight_chart",
-        """
-        SELECT date, weight_kg
-        FROM weight_logs
-        WHERE user_id = $1
-          AND date >= $2
-          AND date <= $3
-        ORDER BY date ASC
-        """,
-        str(user["id"]),
-        start_date,
-        end_date,
-    )
-
-    items = [WeightChartItem(date=row["date"].isoformat(), weight=float(row["weight_kg"])) for row in rows]
-    return WeightChartResponse(items=items)

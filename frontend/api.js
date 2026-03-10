@@ -251,20 +251,8 @@ export function getSubscription() {
   return request("/v1/subscription");
 }
 
-export function getWeeklyReport() {
-  return request("/v1/reports/weekly");
-}
-
-export function getMonthlyReport() {
-  return request("/v1/reports/monthly");
-}
-
-export function getWhyNotLosing() {
-  return request("/v1/analysis/why-not-losing");
-}
-
 export function getWeightChart() {
-  return request("/v1/charts/weight");
+  return request("/v1/stats/charts/weight");
 }
 
 export function updateProfileGoal(dailyGoal) {
@@ -341,4 +329,15 @@ export function refreshYookassaPayment(paymentId) {
 
 export function getStreak() {
   return request("/v1/streak");
+}
+
+export function logWeight(date, weightKg) {
+  return request("/v1/stats/weight", {
+    method: "POST",
+    body: { date, weightKg },
+  });
+}
+
+export function getStatsWeekly() {
+  return request("/v1/stats/weekly");
 }

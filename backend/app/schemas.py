@@ -386,6 +386,18 @@ class WeightChartResponse(BaseModel):
     items: List[WeightChartItem]
 
 
+class WeightLogRequest(BaseModel):
+    date: str  # YYYY-MM-DD
+    weightKg: float = Field(..., ge=20, le=400)
+
+
+class WeightLogResponse(BaseModel):
+    id: UUID
+    userId: UUID
+    date: str
+    weightKg: float
+    createdAt: datetime
+
 class Step1ItemNutrition(BaseModel):
     calories_kcal: float = Field(..., ge=0)
     protein_g: float = Field(..., ge=0)

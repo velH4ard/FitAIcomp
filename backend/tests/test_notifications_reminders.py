@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 import importlib
 import inspect
 
@@ -15,8 +15,8 @@ from app.main import app
 MOCK_USER = {
     "id": "00000000-0000-0000-0000-00000000a001",
     "telegram_id": 900000001,
-    "subscription_status": "free",
-    "subscription_active_until": None,
+    "subscription_status": "active",
+    "subscription_active_until": datetime.now(timezone.utc) + timedelta(days=30),
     "is_onboarded": True,
     "profile": {},
 }

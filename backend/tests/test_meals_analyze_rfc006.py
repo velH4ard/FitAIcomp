@@ -956,9 +956,10 @@ async def test_analyze_meal_ai_provider_error_compensates_and_marks_failed(
 
 @pytest.mark.asyncio
 async def test_analyze_meal_forced_failure_compensation_never_negative(
-    client, auth_and_db_overrides, valid_image_upload
+    client, auth_and_db_overrides, valid_image_upload, mock_openrouter
 ):
     fake_conn = auth_and_db_overrides
+    _runtime_settings().APP_ENV = 'development'
     _runtime_settings().MEALS_ANALYZE_FORCE_FAIL_AFTER_RESERVE = 1
 
     response = await client.post(
@@ -986,7 +987,7 @@ async def test_analyze_meal_forced_failure_compensation_never_negative(
 
 @pytest.mark.asyncio
 async def test_analyze_meal_forced_failure_compensates_without_meal_or_daily_stats_corruption(
-    client, auth_and_db_overrides, valid_image_upload
+    client, auth_and_db_overrides, valid_image_upload, mock_openrouter
 ):
     fake_conn = auth_and_db_overrides
     today = datetime.now(timezone.utc).date()
@@ -998,6 +999,7 @@ async def test_analyze_meal_forced_failure_compensates_without_meal_or_daily_sta
         "meals_count": 1,
     }
     before_daily_stats = dict(fake_conn.daily_stats)
+    _runtime_settings().APP_ENV = 'development'
     _runtime_settings().MEALS_ANALYZE_FORCE_FAIL_AFTER_RESERVE = 1
 
     response = await client.post(

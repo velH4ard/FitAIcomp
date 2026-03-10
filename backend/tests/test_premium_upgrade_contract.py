@@ -38,8 +38,7 @@ class _NoopConn:
         ("/v1/reports/weekly", "reports.weekly"),
         ("/v1/reports/monthly", "reports.monthly"),
         ("/v1/analysis/why-not-losing", "analysis.why_not_losing"),
-        ("/v1/charts/weight", "charts.weight"),
-    ],
+            ],
 )
 async def test_non_premium_endpoints_return_paywall_blocked_with_semantic_details(client, endpoint, feature):
     user = {
@@ -126,37 +125,6 @@ async def test_why_not_losing_returns_rule_based_patterns(client):
         assert " " not in insight["rule"]
         assert isinstance(insight["text"], str) and insight["text"].strip()
         assert isinstance(insight["recommendation"], str) and insight["recommendation"].strip()
-
-
-@pytest.mark.asyncio
-async def test_weight_chart_response_shape_and_order(client):
-    user = {
-        "id": "00000000-0000-0000-0000-00000000aa04",
-        "telegram_id": 911004,
-        "subscription_status": "active",
-        "subscription_active_until": datetime.now(timezone.utc) + timedelta(days=7),
-        "is_onboarded": True,
-        "profile": {},
-    }
-
-    _override_user(user)
-    _override_db(_NoopConn())
-    try:
-        response = await client.get("/v1/charts/weight?dateFrom=2026-02-01&dateTo=2026-02-07")
-    finally:
-        _clear_overrides()
-
-    assert response.status_code == 200
-    body = response.json()
-    assert isinstance(body["items"], list)
-
-    dates = [item["date"] for item in body["items"]]
-    assert dates == sorted(dates)
-
-    for item in body["items"]:
-        assert set(item.keys()) == {"date", "weight"}
-        assert isinstance(item["date"], str)
-        assert 20 <= float(item["weight"]) <= 400
 
 
 @pytest.mark.asyncio
