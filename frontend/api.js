@@ -153,7 +153,6 @@ async function request(path, options = {}, retryCount = 0) {
   const isUnauthorized = response.status === 401 || apiError.code === "UNAUTHORIZED";
 
   if (isUnauthorized && auth && retryCount === 0) {
-    tokenInvalidator();
     const reauthOk = await silentReauthHandler();
     if (reauthOk) {
       if (IS_DEV) {
@@ -161,8 +160,10 @@ async function request(path, options = {}, retryCount = 0) {
       }
       return request(path, options, 1);
     }
+    tokenInvalidator();
     unauthorizedHandler(apiError);
   } else if (auth && (isUnauthorized || apiError.code === "UNAUTHORIZED")) {
+    tokenInvalidator();
     unauthorizedHandler(apiError);
   }
 

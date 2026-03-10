@@ -189,8 +189,6 @@ async function silentTelegramReauth() {
       return false;
     }
 
-    clearTokenOnly();
-
     try {
       const response = await authTelegram(initData);
       const nextToken = response?.accessToken;
