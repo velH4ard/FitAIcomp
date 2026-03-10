@@ -73,6 +73,7 @@ const state = {
   usage: null,
   subscription: null,
   dailyStats: null,
+  weeklyStats: null,
   streak: null,
   streakModalOpen: false,
   pendingPaymentId: localStorage.getItem(STORAGE_PENDING_PAYMENT_KEY),
@@ -830,19 +831,19 @@ function createDailySummaryCard() {
     const newVal = window.prompt("Введите новую дневную цель (ккал):", target);
     if (!newVal) return;
     const parsed = parseInt(newVal, 10);
-    if (isNaN(parsed) || parsed < 1000 || parsed > 5000) {
-      showToast("Пожалуйста, введите число от 1000 до 5000");
+    if (isNaN(parsed) || parsed < 800 || parsed > 6000) {
+      showToast("Пожалуйста, введите число от 800 до 6000");
       return;
     }
     
     setBusy(true);
     render();
     updateProfileGoal(parsed)
-      .then((res) => {
-        // Update local user profile goal override
+      .then(async (res) => {
         if (!state.user.profile) state.user.profile = {};
-        // Storing it in a way getDailyTarget can read it if we adjust it
-        state.user.profile.dailyGoal = res.dailyGoal;
+        state.user.profile.dailyGoal = Number(res?.dailyGoal || parsed);
+        state.user = await getMe();
+        await refreshUsageAndSubscription();
         showToast("Цель обновлена", "info");
       })
       .catch((err) => showToast(mapFriendlyError(err)))
@@ -1031,15 +1032,19 @@ async function refreshUsageAndSubscription() {
   if (!state.token) {
     return;
   }
-  const [usage, subscription, dailyStats, streak] = await Promise.all([
+  const [usage, subscription, dailyStats, weeklyStats, weightChart, streak] = await Promise.all([
     getUsageToday(),
     getSubscription(),
     getStatsDaily(getTodayUtcDate()),
+    getStatsWeekly().catch(() => ({ days: [] })),
+    getWeightChart().catch(() => ({ items: [] })),
     getStreak().catch(() => ({ currentStreak: 0, bestStreak: 0, lastCompletedDate: null })),
   ]);
   state.usage = usage;
   state.subscription = subscription;
   state.dailyStats = dailyStats;
+  state.weeklyStats = weeklyStats;
+  state.weightChart = weightChart;
   state.streak = streak;
 }
 
@@ -1131,15 +1136,6 @@ async function handleAnalyze(file) {
     return;
   }
 
-  const descriptionError = validateMealDescription(state.mealDescription);
-  if (descriptionError) {
-    state.mealDescriptionError = descriptionError;
-    state.mealDescriptionExpanded = true;
-    render();
-    return;
-  }
-
-  state.mealDescriptionError = "";
   const mealDescription = getTrimmedMealDescription();
   state.lastSubmittedDescription = mealDescription;
 
@@ -1191,8 +1187,6 @@ async function handleAnalyze(file) {
     }
 
     state.mealDescription = "";
-    state.mealDescriptionError = "";
-    state.mealDescriptionExpanded = false;
 
     // Optimistic daily summary update so the main screen reflects calories immediately.
     const prev = state.dailyStats || {};
@@ -1238,17 +1232,11 @@ async function handleAnalyze(file) {
       state.screen = "result";
     }
   } catch (error) {
-    const backendDescriptionError = getDescriptionBackendError(error);
-    if (backendDescriptionError) {
-      state.mealDescriptionError = backendDescriptionError;
-      state.mealDescriptionExpanded = true;
-    }
-
     if (!routeByBusinessError(error)) {
       state.screen = previousScreen;
-      if (!backendDescriptionError && isMissingImageValidationError(error)) {
+      if (isMissingImageValidationError(error)) {
         showToast("Добавьте фото");
-      } else if (!backendDescriptionError) {
+      } else {
         showToast(mapAnalyzeErrorToToast(error));
       }
     }
@@ -1802,78 +1790,11 @@ function renderMainScreen() {
 
     zone.append(iconBox, uploadTitle, uploadSub);
     zone.addEventListener("click", () => {
-      const currentDescriptionError = validateMealDescription(state.mealDescription);
-      if (currentDescriptionError) {
-        state.mealDescriptionError = currentDescriptionError;
-        state.mealDescriptionExpanded = true;
-        render();
-        return;
-      }
-      state.mealDescriptionError = "";
       fileInput.click();
     });
     zone.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") zone.click(); });
 
-    // Description panel
-    const descriptionCard = document.createElement("details");
-    descriptionCard.className = "description-panel";
-    descriptionCard.open = state.mealDescriptionExpanded;
-    descriptionCard.addEventListener("toggle", () => {
-      state.mealDescriptionExpanded = descriptionCard.open;
-    });
-
-    const descriptionSummary = document.createElement("summary");
-    descriptionSummary.textContent = "Описание блюда (необязательно)";
-
-    const descriptionBody = document.createElement("div");
-    descriptionBody.className = "description-panel-body";
-
-    const helper = document.createElement("p");
-    helper.style.cssText = "font-size:0.75rem;color:var(--bark);opacity:0.5;line-height:1.5;";
-    helper.textContent = "Помогает повысить точность анализа. Напишите состав, если блюдо сложное.";
-
-    const textarea = document.createElement("textarea");
-    textarea.className = "description-textarea" + (state.mealDescriptionError ? " description-textarea--error" : "");
-    textarea.placeholder = "Например: гречка с курицей, оливковое масло";
-    textarea.value = state.mealDescription;
-    textarea.maxLength = MEAL_DESCRIPTION_MAX_LENGTH;
-
-    const descriptionFooter = document.createElement("div");
-    descriptionFooter.className = "description-footer";
-
-    const descriptionError = document.createElement("p");
-    descriptionError.className = "description-error";
-    descriptionError.textContent = state.mealDescriptionError || "";
-
-    const counter = document.createElement("p");
-    counter.className = "description-counter";
-    counter.textContent = `${state.mealDescription.length}/${MEAL_DESCRIPTION_MAX_LENGTH}`;
-
-    function syncDescriptionMeta() {
-      const length = textarea.value.length;
-      const error = validateMealDescription(textarea.value) || state.mealDescriptionError;
-      counter.textContent = `${length}/${MEAL_DESCRIPTION_MAX_LENGTH}`;
-      if (error) {
-        textarea.classList.add("description-textarea--error");
-        descriptionError.textContent = error;
-      } else {
-        textarea.classList.remove("description-textarea--error");
-        descriptionError.textContent = "";
-      }
-    }
-
-    textarea.addEventListener("input", () => {
-      state.mealDescription = textarea.value;
-      state.mealDescriptionError = validateMealDescription(state.mealDescription);
-      syncDescriptionMeta();
-    });
-
-    syncDescriptionMeta();
-    descriptionFooter.append(descriptionError, counter);
-    descriptionBody.append(helper, textarea, descriptionFooter);
-    descriptionCard.append(descriptionSummary, descriptionBody);
-
-    uploader.append(zone, descriptionCard);
+    uploader.append(zone);
   }
 
   uploader.append(fileInput);
@@ -1883,14 +1804,6 @@ function renderMainScreen() {
     const uploadBtn = createPrimaryButton(
       state.analyzing ? "Анализируем..." : "Загрузить фото",
       () => {
-        const currentDescriptionError = validateMealDescription(state.mealDescription);
-        if (currentDescriptionError) {
-          state.mealDescriptionError = currentDescriptionError;
-          state.mealDescriptionExpanded = true;
-          render();
-          return;
-        }
-        state.mealDescriptionError = "";
         fileInput.click();
       },
       {
@@ -2082,8 +1995,6 @@ function renderMainScreen() {
   const actions = document.createElement("div");
   actions.className = "action-grid fade-up d3";
   actions.append(
-    createSecondaryButton("История", openHistory, { disabled: state.busy, icon: "history" }),
-    
     createSecondaryButton("Подписка", async () => {
       setBusy(true);
       try {
@@ -2097,14 +2008,15 @@ function renderMainScreen() {
       }
     }, { disabled: state.busy, icon: "crown" }),
     createSecondaryButton("Поделиться", openShareScreen, { disabled: state.busy, icon: "share" }),
-    createSecondaryButton("Выйти", () => {
-      clearSession();
-      state.screen = "auth";
-      render();
-    }, { disabled: state.busy }),
   );
 
+  const historyWrap = document.createElement("div");
+  historyWrap.className = "fade-up d3";
+  historyWrap.style.marginTop = "0.75rem";
+  historyWrap.append(createSecondaryButton("История", openHistory, { disabled: state.busy, icon: "history" }));
+
   root.append(actions);
+  root.append(historyWrap);
   return root;
 }
 
