@@ -112,6 +112,7 @@ const state = {
   goalEntryOpen: false,
   goalEntryValue: "",
   goalEntrySaving: false,
+  goalEntryIgnoreClicksUntil: 0,
 };
 
 let tokenRefreshTimer = null;
@@ -932,6 +933,9 @@ function createDailySummaryCard() {
   editGoalBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:0.875rem;height:0.875rem;"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>`;
   editGoalBtn.addEventListener("click", () => {
     if (state.goalEntrySaving) {
+      return;
+    }
+    if (Date.now() < state.goalEntryIgnoreClicksUntil) {
       return;
     }
     state.goalEntryValue = String(target);
@@ -2451,15 +2455,24 @@ function renderWeightEntryModal() {
   return overlay;
 }
 
-function closeGoalEntry() {
+function closeGoalEntry(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
   if (state.goalEntrySaving) {
     return;
   }
+  state.goalEntryIgnoreClicksUntil = Date.now() + 300;
   state.goalEntryOpen = false;
   render();
 }
 
-async function submitGoalEntry() {
+async function submitGoalEntry(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
   if (state.goalEntrySaving) {
     return;
   }
@@ -2478,6 +2491,7 @@ async function submitGoalEntry() {
     }),
   ]);
 
+  state.goalEntryIgnoreClicksUntil = Date.now() + 300;
   state.goalEntryOpen = false;
   render();
 
