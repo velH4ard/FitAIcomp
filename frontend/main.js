@@ -602,6 +602,7 @@ function closeWeightEntry() {
     return;
   }
   state.weightEntryOpen = false;
+  removeModalOverlays();
   render();
 }
 
@@ -641,6 +642,7 @@ async function submitWeightEntry() {
     state.weightChart.items.sort((a, b) => String(a.date).localeCompare(String(b.date)));
   }
   state.weightEntryOpen = false;
+  removeModalOverlays();
   render();
 
   try {
@@ -2384,6 +2386,7 @@ function createScreenLoader() {
 
 function renderWeightEntryModal() {
   const overlay = document.createElement("div");
+  overlay.id = "weight-entry-overlay";
   overlay.className = "weight-entry-overlay";
   overlay.addEventListener("click", (event) => {
     if (event.target === overlay) {
@@ -2455,6 +2458,13 @@ function renderWeightEntryModal() {
   return overlay;
 }
 
+function removeModalOverlays() {
+  document.querySelector(".streak-modal-overlay")?.remove();
+  document.getElementById("weight-entry-overlay")?.remove();
+  document.getElementById("goal-entry-overlay")?.remove();
+  document.querySelectorAll(".weight-entry-overlay").forEach((node) => node.remove());
+}
+
 function closeGoalEntry(event) {
   if (event) {
     event.preventDefault();
@@ -2465,6 +2475,7 @@ function closeGoalEntry(event) {
   }
   state.goalEntryIgnoreClicksUntil = Date.now() + 300;
   state.goalEntryOpen = false;
+  removeModalOverlays();
   render();
 }
 
@@ -2493,6 +2504,7 @@ async function submitGoalEntry(event) {
 
   state.goalEntryIgnoreClicksUntil = Date.now() + 300;
   state.goalEntryOpen = false;
+  removeModalOverlays();
   render();
 
   try {
@@ -2517,6 +2529,7 @@ async function submitGoalEntry(event) {
 
 function renderGoalEntryModal() {
   const overlay = document.createElement("div");
+  overlay.id = "goal-entry-overlay";
   overlay.className = "weight-entry-overlay";
   overlay.addEventListener("click", (event) => {
     if (event.target === overlay) {
@@ -2683,7 +2696,7 @@ function render() {
   state.scrollByScreen[previousScreen] = window.scrollY;
   appContent.innerHTML = "";
   document.getElementById("app-screen-loader")?.remove();
-  document.querySelector(".streak-modal-overlay")?.remove();
+  removeModalOverlays();
 
   renderHeader(state.screen);
 
