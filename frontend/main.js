@@ -1952,7 +1952,15 @@ function renderMainScreen() {
   }
 
   // ===== Charts Section =====
-  if (state.weeklyStats && state.weeklyStats.days && state.weeklyStats.days.length > 0) {
+  const weeklyDays = Array.isArray(state.weeklyStats?.days) ? state.weeklyStats.days : [];
+  const daysWithCalories = weeklyDays.filter((day) => Number(day?.calories_kcal || 0) > 0);
+  const showCaloriesChart = daysWithCalories.length >= 2;
+
+  const weightItems = Array.isArray(state.weightChart?.items) ? [...state.weightChart.items] : [];
+  const onboardingWeight = getProfileWeightKg();
+  const showWeightChart = weightItems.length >= 2;
+
+  if (showCaloriesChart) {
     const calCard = document.createElement("section");
     calCard.className = "glass fade-up d3";
     calCard.style.padding = "1.25rem";
@@ -1984,7 +1992,7 @@ function renderMainScreen() {
     chartWrap.style.height = "100px";
     chartWrap.style.gap = "4px";
     
-    const days = state.weeklyStats.days;
+    const days = weeklyDays;
     const maxCal = Math.max(1, ...days.map(d => d.calories_kcal || 0));
     const goalCal = getDailyTarget(state.user?.profile) || 2000;
     const chartMax = Math.max(maxCal, goalCal * 1.2); // Give some headroom above goal
@@ -2036,7 +2044,7 @@ function renderMainScreen() {
     
     calCard.append(chartWrap);
     root.append(calCard);
-  } else {
+  } else if (weeklyDays.length > 0) {
     const calCard = document.createElement("section");
     calCard.className = "glass fade-up d3";
     calCard.style.padding = "1.25rem";
@@ -2047,22 +2055,13 @@ function renderMainScreen() {
     const hint = document.createElement("p");
     hint.className = "analytics-hint";
     hint.style.marginTop = "0.5rem";
-    hint.textContent = "Пока нет данных для графика.";
+    hint.textContent = "Добавьте еще приемы пищи, и здесь появится график динамики.";
     calCard.append(title, hint);
     root.append(calCard);
   }
 
   // Weight Chart
-  const weightItems = Array.isArray(state.weightChart?.items) ? [...state.weightChart.items] : [];
-  const onboardingWeight = getProfileWeightKg();
-  if (!weightItems.length && Number.isFinite(onboardingWeight)) {
-    weightItems.push({
-      date: getTodayUtcDate(),
-      weight: onboardingWeight,
-    });
-  }
-
-  if (weightItems.length > 0) {
+  if (showWeightChart) {
     const weightCard = document.createElement("section");
     weightCard.className = "glass fade-up d3";
     weightCard.style.padding = "1.25rem";
@@ -2121,7 +2120,6 @@ function renderMainScreen() {
     
     root.append(weightCard);
   } else {
-    // Empty state for weight
     const weightCard = document.createElement("section");
     weightCard.className = "glass fade-up d3";
     weightCard.style.padding = "1.25rem";
@@ -2133,14 +2131,26 @@ function renderMainScreen() {
     const weightTitle = document.createElement("p");
     weightTitle.className = "analytics-label";
     weightTitle.textContent = "Динамика веса";
+
+    const weightHint = document.createElement("p");
+    weightHint.className = "analytics-hint";
+    weightHint.style.marginTop = "0.5rem";
+    if (Number.isFinite(onboardingWeight)) {
+      weightHint.textContent = `Стартовый вес из онбординга: ${formatMetric(onboardingWeight, 1)} кг. Добавьте еще точку для графика.`;
+    } else {
+      weightHint.textContent = "Добавьте первый вес, чтобы начать отслеживание динамики.";
+    }
     
     const weightAddBtn = document.createElement("button");
     weightAddBtn.type = "button";
     weightAddBtn.className = "inline-weight-btn";
-    weightAddBtn.textContent = "+ Внести первый вес";
+    weightAddBtn.textContent = Number.isFinite(onboardingWeight) ? "+ Добавить новую точку" : "+ Внести первый вес";
     weightAddBtn.addEventListener("click", handleAddWeight);
-    
-    weightCard.append(weightTitle, weightAddBtn);
+
+    const leftBlock = document.createElement("div");
+    leftBlock.append(weightTitle, weightHint);
+
+    weightCard.append(leftBlock, weightAddBtn);
     root.append(weightCard);
   }
 
