@@ -219,7 +219,6 @@ setUnauthorizedHandler(() => {
   if (state.screen === "auth" || state.screen === "loading") {
     return;
   }
-  clearSession();
   bootstrapAuth({ silent: true });
 });
 
@@ -529,7 +528,6 @@ function routeByBusinessError(error) {
     return false;
   }
   if (error.code === "UNAUTHORIZED") {
-    clearSession();
     bootstrapAuth({ silent: true });
     return true;
   }
@@ -1012,25 +1010,38 @@ async function bootstrapAuth(options = {}) {
     notifyTelegramAppReady();
     return await bootstrapUser();
   } catch (error) {
+    const isInitDataError = error instanceof ApiError
+      && (error.code === "AUTH_INVALID_INITDATA" || error.code === "AUTH_EXPIRED_INITDATA");
     if (
-      error instanceof ApiError
-      && (error.code === "AUTH_INVALID_INITDATA" || error.code === "AUTH_EXPIRED_INITDATA")
+      isInitDataError
     ) {
       try {
         sessionStorage.removeItem(STORAGE_TG_INITDATA_KEY);
       } catch (_removeError) {
         // ignore storage errors
       }
-    }
-    clearSession();
-    nextAutoAuthAttemptAt = Date.now() + AUTH_RETRY_COOLDOWN_MS;
-    if (error instanceof ApiError && (error.code === "AUTH_INVALID_INITDATA" || error.code === "AUTH_EXPIRED_INITDATA")) {
+      clearSession();
+      nextAutoAuthAttemptAt = Date.now() + AUTH_RETRY_COOLDOWN_MS;
       state.authErrorMessage = "Ошибка авторизации. Откройте приложение через Telegram.";
-    } else if (error instanceof ApiError && (error.code === "NETWORK" || error.code === "NETWORK_ERROR")) {
+      state.screen = "auth";
+      render();
+      return false;
+    }
+
+    if (state.token) {
+      const loadedWithToken = await bootstrapUser();
+      if (loadedWithToken) {
+        return true;
+      }
+    }
+
+    if (error instanceof ApiError && (error.code === "NETWORK" || error.code === "NETWORK_ERROR")) {
       state.authErrorMessage = "Нет соединения с сервером. Попробуйте снова.";
     } else {
       state.authErrorMessage = "Не удалось загрузить данные. Попробуйте снова.";
     }
+    clearSession();
+    nextAutoAuthAttemptAt = Date.now() + AUTH_RETRY_COOLDOWN_MS;
     state.screen = "auth";
     render();
     return false;

@@ -160,10 +160,8 @@ async function request(path, options = {}, retryCount = 0) {
       }
       return request(path, options, 1);
     }
-    tokenInvalidator();
     unauthorizedHandler(apiError);
   } else if (auth && (isUnauthorized || apiError.code === "UNAUTHORIZED")) {
-    tokenInvalidator();
     unauthorizedHandler(apiError);
   }
 
