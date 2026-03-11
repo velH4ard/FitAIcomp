@@ -650,6 +650,14 @@ function formatMetric(value, digits = 0) {
   });
 }
 
+function formatDateForApi(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(d.getTime())) {
+    return getTodayUtcDate();
+  }
+  return d.toISOString().slice(0, 10);
+}
+
 function buildChartPath(points, width, height, padding) {
   if (!points.length) {
     return "";
@@ -2167,6 +2175,82 @@ function renderShareScreen() {
   container.append(shareScreen);
 
   return container;
+}
+
+function renderPaywallScreen() {
+  if (state.subscription?.status === "active") {
+    state.screen = "main";
+    return renderMainScreen();
+  }
+
+  const root = createRoot();
+  root.append(createPremiumGateCard({
+    onCta: handleUpgrade,
+    note: "Лимит Premium: 20 фото в день.",
+  }));
+
+  root.append(
+    createPrimaryButton("Получить Premium за 499 ₽", handleUpgrade, {
+      disabled: state.busy,
+      loading: state.busy,
+      icon: "crown",
+    }),
+    createSecondaryButton("Я уже оплатил(а)", async () => {
+      if (state.busy) {
+        return;
+      }
+      setBusy(true);
+      await refreshAfterResume({ notifyResult: true });
+      state.screen = state.subscription?.status === "active" ? "main" : "paywall";
+      setBusy(false);
+      render();
+    }, { disabled: state.busy, icon: "refresh" }),
+  );
+
+  return root;
+}
+
+function renderSubscriptionScreen() {
+  const root = createRoot();
+  ensureReminderState();
+
+  const sub = state.subscription || {};
+  const isActive = sub.status === "active";
+
+  const card = document.createElement("section");
+  card.className = "glass analytics-card fade-up d1";
+
+  const badge = document.createElement("div");
+  badge.className = isActive ? "sub-status-badge sub-status-badge--active" : "sub-status-badge sub-status-badge--free";
+  badge.textContent = isActive ? "✦ Premium активен" : `Статус: ${sub.status || "free"}`;
+
+  const grid = document.createElement("div");
+  grid.className = "analytics-grid";
+  grid.append(
+    createSecondaryInfo("Активна до", sub.activeUntil ? new Date(sub.activeUntil).toLocaleDateString("ru-RU") : "-"),
+    createSecondaryInfo("Стоимость", "499 ₽ / 30 дней"),
+    createSecondaryInfo("Лимит", `${sub.dailyLimit ?? 0} фото/день`),
+    createSecondaryInfo("Использовано", `${sub.usedToday ?? 0}`),
+    createSecondaryInfo("Осталось", `${sub.remainingToday ?? 0}`),
+  );
+
+  card.append(badge, grid);
+  root.append(card);
+
+  root.append(createSecondaryButton("Обновить статус", async () => {
+    setBusy(true);
+    try {
+      state.subscription = await getSubscription();
+      await refreshUsageAndSubscription();
+    } catch (error) {
+      showToast(mapFriendlyError(error));
+    } finally {
+      setBusy(false);
+      render();
+    }
+  }, { disabled: state.busy, loading: state.busy, icon: "refresh" }));
+
+  return root;
 }
 
 function ensureToastMount() {
