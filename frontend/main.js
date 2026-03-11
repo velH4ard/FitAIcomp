@@ -2381,44 +2381,59 @@ function render() {
   renderHeader(state.screen);
 
   let screenNode;
-  switch (state.screen) {
-    case "auth":
-      screenNode = renderAuthScreen();
-      break;
-    case "onboarding":
-      screenNode = renderOnboardingScreen();
-      break;
-    case "main":
-      screenNode = renderMainScreen();
-      break;
-    case "result":
-      screenNode = renderResultScreen("last");
-      break;
-    case "analysisAdjust":
-      screenNode = renderAnalysisAdjustScreen();
-      break;
-    case "analysisSummary":
-      screenNode = renderAnalysisSummaryScreen();
-      break;
-    case "history":
-      screenNode = renderHistoryScreen();
-      break;
-    case "historyDetail":
-      screenNode = renderResultScreen("history");
-      break;
-    case "paywall":
-      screenNode = renderPaywallScreen();
-      break;
-    case "subscription":
-      screenNode = renderSubscriptionScreen();
-      break;
-    case "share":
-      screenNode = renderShareScreen();
-      break;
-    case "loading":
-    default:
-      screenNode = renderLoadingScreen();
-      break;
+  try {
+    switch (state.screen) {
+      case "auth":
+        screenNode = renderAuthScreen();
+        break;
+      case "onboarding":
+        screenNode = renderOnboardingScreen();
+        break;
+      case "main":
+        screenNode = renderMainScreen();
+        break;
+      case "result":
+        screenNode = renderResultScreen("last");
+        break;
+      case "analysisAdjust":
+        screenNode = renderAnalysisAdjustScreen();
+        break;
+      case "analysisSummary":
+        screenNode = renderAnalysisSummaryScreen();
+        break;
+      case "history":
+        screenNode = renderHistoryScreen();
+        break;
+      case "historyDetail":
+        screenNode = renderResultScreen("history");
+        break;
+      case "paywall":
+        screenNode = renderPaywallScreen();
+        break;
+      case "subscription":
+        screenNode = renderSubscriptionScreen();
+        break;
+      case "share":
+        screenNode = renderShareScreen();
+        break;
+      case "loading":
+      default:
+        screenNode = renderLoadingScreen();
+        break;
+    }
+  } catch (error) {
+    console.error("RENDER_FATAL", { screen: state.screen, error });
+    const fallback = document.createElement("section");
+    fallback.className = "glass auth-card";
+    const title = document.createElement("p");
+    title.className = "auth-error-text";
+    title.textContent = "Ошибка интерфейса";
+    const details = document.createElement("p");
+    details.className = "auth-hint-text";
+    const message = error instanceof Error ? error.message : "unknown";
+    details.textContent = `screen=${state.screen}; ${message}`;
+    fallback.append(title, details);
+    screenNode = fallback;
   }
 
   const screenContainer = document.createElement("div");
