@@ -108,6 +108,10 @@ const state = {
   analysisFeedback: "",
   weightEntryOpen: false,
   weightEntryValue: "",
+  weightEntrySaving: false,
+  goalEntryOpen: false,
+  goalEntryValue: "",
+  goalEntrySaving: false,
 };
 
 let tokenRefreshTimer = null;
@@ -572,19 +576,28 @@ function toNumber(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function getProfileWeightKg() {
+  const raw = state.user?.profile?.weightKg;
+  const parsed = parseFloat(String(raw ?? "").replace(",", "."));
+  if (Number.isFinite(parsed) && parsed >= 20 && parsed <= 400) {
+    return parsed;
+  }
+  return null;
+}
+
 
 function handleAddWeight() {
   if (state.busy) {
     return;
   }
-  const currentWeight = Number(state.user?.profile?.weightKg) || 70;
+  const currentWeight = getProfileWeightKg() || 70;
   state.weightEntryValue = String(currentWeight);
   state.weightEntryOpen = true;
   render();
 }
 
 function closeWeightEntry() {
-  if (state.busy) {
+  if (state.weightEntrySaving) {
     return;
   }
   state.weightEntryOpen = false;
@@ -598,9 +611,21 @@ async function submitWeightEntry() {
     return;
   }
 
-  setBusy(true);
+  if (state.weightEntrySaving) {
+    return;
+  }
+  state.weightEntrySaving = true;
+  render();
+
+  const withTimeout = (promise, timeoutMs = 15000) => Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      window.setTimeout(() => reject(new Error("timeout")), timeoutMs);
+    }),
+  ]);
+
   try {
-    await logWeight(formatDateForApi(new Date()), parsed);
+    await withTimeout(logWeight(formatDateForApi(new Date()), parsed));
     showToast("Вес сохранен!", "info");
     if (!state.user.profile) {
       state.user.profile = {};
@@ -617,12 +642,16 @@ async function submitWeightEntry() {
       state.weightChart.items.push({ date: today, weight: parsed });
       state.weightChart.items.sort((a, b) => String(a.date).localeCompare(String(b.date)));
     }
-    await refreshAfterResume();
+    await refreshUsageAndSubscription();
     state.weightEntryOpen = false;
   } catch (err) {
-    showToast(mapFriendlyError(err));
+    if (err instanceof Error && err.message === "timeout") {
+      showToast("Сохранение веса заняло слишком много времени");
+    } else {
+      showToast(mapFriendlyError(err));
+    }
   } finally {
-    setBusy(false);
+    state.weightEntrySaving = false;
     render();
   }
 }
@@ -899,29 +928,12 @@ function createDailySummaryCard() {
   editGoalBtn.className = "inline-icon-btn";
   editGoalBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:0.875rem;height:0.875rem;"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>`;
   editGoalBtn.addEventListener("click", () => {
-    const newVal = window.prompt("Введите новую дневную цель (ккал):", target);
-    if (!newVal) return;
-    const parsed = parseInt(newVal, 10);
-    if (isNaN(parsed) || parsed < 800 || parsed > 6000) {
-      showToast("Пожалуйста, введите число от 800 до 6000");
+    if (state.goalEntrySaving) {
       return;
     }
-    
-    setBusy(true);
+    state.goalEntryValue = String(target);
+    state.goalEntryOpen = true;
     render();
-    updateProfileGoal(parsed)
-      .then(async (res) => {
-        if (!state.user.profile) state.user.profile = {};
-        state.user.profile.dailyGoal = Number(res?.dailyGoal || parsed);
-        state.user = await getMe();
-        await refreshUsageAndSubscription();
-        showToast("Цель обновлена", "info");
-      })
-      .catch((err) => showToast(mapFriendlyError(err)))
-      .finally(() => {
-        setBusy(false);
-        render();
-      });
   });
   
   subLabel.append(editGoalBtn);
@@ -1991,11 +2003,12 @@ function renderMainScreen() {
       
       const val = day.calories_kcal || 0;
       const pct = (val / chartMax) * 100;
+      const normalizedPct = val > 0 ? Math.max(8, pct) : 4;
       
       const bar = document.createElement("div");
       bar.style.width = "100%";
       bar.style.maxWidth = "24px";
-      bar.style.height = `${pct}%`;
+      bar.style.height = `${Math.min(100, normalizedPct)}%`;
       bar.style.backgroundColor = val > goalCal ? "var(--clay)" : "var(--sage)";
       bar.style.borderRadius = "4px";
       bar.style.transition = "height 0.3s ease";
@@ -2006,9 +2019,10 @@ function renderMainScreen() {
       lbl.style.fontSize = "0.625rem";
       lbl.style.color = "var(--bark)";
       lbl.style.opacity = "0.6";
-      const dateObj = new Date(day.date);
+      const dateObj = new Date(`${day.date}T00:00:00Z`);
       const dayNames = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
-      lbl.textContent = dayNames[dateObj.getDay()];
+      const dayIndex = Number.isNaN(dateObj.getTime()) ? 0 : dateObj.getUTCDay();
+      lbl.textContent = dayNames[dayIndex] || "-";
       
       col.append(barWrapBox, lbl);
       chartWrap.append(col);
@@ -2034,10 +2048,11 @@ function renderMainScreen() {
 
   // Weight Chart
   const weightItems = Array.isArray(state.weightChart?.items) ? [...state.weightChart.items] : [];
-  if (!weightItems.length && Number.isFinite(Number(state.user?.profile?.weightKg))) {
+  const onboardingWeight = getProfileWeightKg();
+  if (!weightItems.length && Number.isFinite(onboardingWeight)) {
     weightItems.push({
       date: getTodayUtcDate(),
-      weight: Number(state.user.profile.weightKg),
+      weight: onboardingWeight,
     });
   }
 
@@ -2421,12 +2436,134 @@ function renderWeightEntryModal() {
   const actions = document.createElement("div");
   actions.className = "weight-entry-actions";
   const save = createPrimaryButton("Сохранить", submitWeightEntry, {
-    disabled: state.busy,
-    loading: state.busy,
+    disabled: state.weightEntrySaving,
+    loading: state.weightEntrySaving,
   });
   save.classList.add("weight-entry-save");
   const cancel = createSecondaryButton("Отмена", closeWeightEntry, {
-    disabled: state.busy,
+    disabled: state.weightEntrySaving,
+  });
+  cancel.classList.add("weight-entry-cancel");
+  actions.append(save, cancel);
+
+  modal.append(badge, title, hint, inputWrap, actions);
+  overlay.append(modal);
+  return overlay;
+}
+
+function closeGoalEntry() {
+  if (state.goalEntrySaving) {
+    return;
+  }
+  state.goalEntryOpen = false;
+  render();
+}
+
+async function submitGoalEntry() {
+  if (state.goalEntrySaving) {
+    return;
+  }
+  const parsed = parseInt(String(state.goalEntryValue || ""), 10);
+  if (!Number.isFinite(parsed) || parsed < 800 || parsed > 6000) {
+    showToast("Пожалуйста, введите число от 800 до 6000");
+    return;
+  }
+
+  state.goalEntrySaving = true;
+  render();
+
+  const withTimeout = (promise, timeoutMs = 15000) => Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      window.setTimeout(() => reject(new Error("timeout")), timeoutMs);
+    }),
+  ]);
+
+  try {
+    const res = await withTimeout(updateProfileGoal(parsed));
+    if (!state.user.profile) {
+      state.user.profile = {};
+    }
+    state.user.profile.dailyGoal = Number(res?.dailyGoal || parsed);
+    await refreshUsageAndSubscription();
+    state.goalEntryOpen = false;
+    showToast("Цель обновлена", "info");
+  } catch (err) {
+    if (err instanceof Error && err.message === "timeout") {
+      showToast("Сохранение цели заняло слишком много времени");
+    } else {
+      showToast(mapFriendlyError(err));
+    }
+  } finally {
+    state.goalEntrySaving = false;
+    render();
+  }
+}
+
+function renderGoalEntryModal() {
+  const overlay = document.createElement("div");
+  overlay.className = "weight-entry-overlay";
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) {
+      closeGoalEntry();
+    }
+  });
+
+  const modal = document.createElement("section");
+  modal.className = "weight-entry-card";
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  modal.addEventListener("click", (event) => {
+    event.stopPropagation();
+  });
+
+  const badge = document.createElement("p");
+  badge.className = "weight-entry-badge";
+  badge.textContent = "цель";
+
+  const title = document.createElement("h3");
+  title.className = "weight-entry-title";
+  title.textContent = "Измените дневную норму";
+
+  const hint = document.createElement("p");
+  hint.className = "weight-entry-hint";
+  hint.textContent = "Допустимый диапазон: 800–6000 ккал";
+
+  const inputWrap = document.createElement("label");
+  inputWrap.className = "weight-entry-input-wrap";
+
+  const input = document.createElement("input");
+  input.className = "weight-entry-input";
+  input.type = "number";
+  input.min = "800";
+  input.max = "6000";
+  input.step = "1";
+  input.placeholder = "2000";
+  input.value = state.goalEntryValue;
+  input.addEventListener("input", () => {
+    state.goalEntryValue = input.value;
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      submitGoalEntry();
+    }
+  });
+
+  const unit = document.createElement("span");
+  unit.className = "weight-entry-unit";
+  unit.textContent = "ккал";
+  inputWrap.append(input, unit);
+
+  const actions = document.createElement("div");
+  actions.className = "weight-entry-actions";
+  const save = createPrimaryButton("Сохранить", submitGoalEntry, {
+    disabled: state.goalEntrySaving,
+    loading: state.goalEntrySaving,
+  });
+  save.classList.add("weight-entry-save");
+  const cancel = createSecondaryButton("Отмена", closeGoalEntry, {
+    disabled: state.goalEntrySaving,
   });
   cancel.classList.add("weight-entry-cancel");
   actions.append(save, cancel);
@@ -2618,6 +2755,10 @@ function render() {
 
   if (state.weightEntryOpen) {
     app.append(renderWeightEntryModal());
+  }
+
+  if (state.goalEntryOpen) {
+    app.append(renderGoalEntryModal());
   }
 
   if (previousScreen !== state.screen) {
