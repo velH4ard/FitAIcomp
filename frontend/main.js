@@ -916,16 +916,18 @@ function createDailySummaryCard() {
   kcalSup.textContent = "ккал";
   kcalEl.append(kcalNum, kcalSup);
 
+  const subMetaRow = document.createElement("div");
+  subMetaRow.className = "daily-card-meta-row";
+
   const subLabel = document.createElement("p");
   subLabel.className = "daily-card-sub";
-  subLabel.style.display = "flex";
-  subLabel.style.alignItems = "center";
-  subLabel.style.gap = "0.25rem";
-  subLabel.innerHTML = `<span>из ${target.toLocaleString("ru-RU")} целевых</span>`;
-  
+  subLabel.textContent = `из ${target.toLocaleString("ru-RU")} целевых · осталось ${remaining.toLocaleString("ru-RU")}`;
+
   const editGoalBtn = document.createElement("button");
   editGoalBtn.type = "button";
   editGoalBtn.className = "inline-icon-btn";
+  editGoalBtn.title = "Изменить цель";
+  editGoalBtn.setAttribute("aria-label", "Изменить цель по калориям");
   editGoalBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:0.875rem;height:0.875rem;"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>`;
   editGoalBtn.addEventListener("click", () => {
     if (state.goalEntrySaving) {
@@ -936,10 +938,7 @@ function createDailySummaryCard() {
     render();
   });
   
-  subLabel.append(editGoalBtn);
-  const remainingSpan = document.createElement("span");
-  remainingSpan.textContent = ` · осталось ${remaining.toLocaleString("ru-RU")}`;
-  subLabel.append(remainingSpan);
+  subMetaRow.append(subLabel, editGoalBtn);
 
   // Row: ring + macros
   const row = document.createElement("div");
@@ -1012,7 +1011,7 @@ function createDailySummaryCard() {
   const track = createProgressBar({ value: progress, max: 100, label: "Прогресс" });
   track.style.display = "none"; // hidden, we use ring instead
 
-  card.append(topLabel, kcalEl, subLabel, row);
+  card.append(topLabel, kcalEl, subMetaRow, row);
 
   if (state.subscription?.status === "active" && state.subscription?.activeUntil) {
     const premium = document.createElement("div");

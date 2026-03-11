@@ -1343,8 +1343,16 @@
   font-size: 0.8125rem;
   color: var(--bark);
   opacity: 0.5;
+  margin: 0;
+}
+
+.daily-card-meta-row {
   margin-top: 0.25rem;
   margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 
 .inline-icon-btn {
