@@ -106,6 +106,8 @@ const state = {
   analysisDraftItems: [],
   analysisStep2Result: null,
   analysisFeedback: "",
+  weightEntryOpen: false,
+  weightEntryValue: "",
 };
 
 let tokenRefreshTimer = null;
@@ -572,32 +574,44 @@ function toNumber(value, fallback = 0) {
 
 
 function handleAddWeight() {
-  const currentWeight = state.user?.profile?.weightKg || 70;
-  const newVal = window.prompt("Введите текущий вес (кг):", currentWeight);
-  if (!newVal) return;
-  const parsed = parseFloat(newVal.replace(',', '.'));
-  if (isNaN(parsed) || parsed < 20 || parsed > 400) {
+  const currentWeight = Number(state.user?.profile?.weightKg) || 70;
+  state.weightEntryValue = String(currentWeight);
+  state.weightEntryOpen = true;
+  render();
+}
+
+function closeWeightEntry() {
+  if (state.busy) {
+    return;
+  }
+  state.weightEntryOpen = false;
+  render();
+}
+
+async function submitWeightEntry() {
+  const parsed = parseFloat(String(state.weightEntryValue || "").replace(",", "."));
+  if (!Number.isFinite(parsed) || parsed < 20 || parsed > 400) {
     showToast("Пожалуйста, введите корректный вес (от 20 до 400 кг)");
     return;
   }
-  
-  setBusy(true);
-  render();
-  
 
-    logWeight(formatDateForApi(new Date()), parsed)
-      .then(() => {
-        showToast("Вес сохранен!", "info");
-        if (!state.user.profile) state.user.profile = {};
-        state.user.profile.weightKg = parsed;
-        return updateProfile(state.user.profile);
-      })
-      .then(() => refreshAfterResume())
-      .catch((err) => showToast(mapFriendlyError(err)))
-      .finally(() => {
-        setBusy(false);
-        render();
-      });
+  setBusy(true);
+  try {
+    await logWeight(formatDateForApi(new Date()), parsed);
+    showToast("Вес сохранен!", "info");
+    if (!state.user.profile) {
+      state.user.profile = {};
+    }
+    state.user.profile.weightKg = parsed;
+    await updateProfile(state.user.profile);
+    await refreshAfterResume();
+    state.weightEntryOpen = false;
+  } catch (err) {
+    showToast(mapFriendlyError(err));
+  } finally {
+    setBusy(false);
+    render();
+  }
 }
 
 function getDailyTarget(profile) {
@@ -2317,6 +2331,52 @@ function createScreenLoader() {
   return loader;
 }
 
+function renderWeightEntryModal() {
+  const overlay = document.createElement("div");
+  overlay.className = "streak-modal-overlay";
+  overlay.style.zIndex = "1200";
+
+  const modal = document.createElement("section");
+  modal.className = "streak-modal";
+  modal.style.maxWidth = "22rem";
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+
+  const title = document.createElement("h3");
+  title.className = "streak-modal-title";
+  title.textContent = "Текущий вес";
+
+  const hint = document.createElement("p");
+  hint.className = "streak-modal-hint";
+  hint.textContent = "Введите вес в килограммах";
+
+  const input = document.createElement("input");
+  input.className = "input-organic";
+  input.type = "number";
+  input.min = "20";
+  input.max = "400";
+  input.step = "0.1";
+  input.value = state.weightEntryValue;
+  input.addEventListener("input", () => {
+    state.weightEntryValue = input.value;
+  });
+
+  const actions = document.createElement("div");
+  actions.style.cssText = "display:flex;gap:0.5rem;margin-top:1rem;";
+  const save = createPrimaryButton("Сохранить", submitWeightEntry, {
+    disabled: state.busy,
+    loading: state.busy,
+  });
+  const cancel = createSecondaryButton("Отмена", closeWeightEntry, {
+    disabled: state.busy,
+  });
+  actions.append(save, cancel);
+
+  modal.append(title, hint, input, actions);
+  overlay.append(modal);
+  return overlay;
+}
+
 function createSecondaryInfo(label, value) {
   const box = document.createElement("div");
   box.className = "info-box";
@@ -2495,6 +2555,10 @@ function render() {
     window.requestAnimationFrame(() => {
       modal.focus();
     });
+  }
+
+  if (state.weightEntryOpen) {
+    app.append(renderWeightEntryModal());
   }
 
   if (previousScreen !== state.screen) {
