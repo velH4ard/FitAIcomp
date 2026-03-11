@@ -120,19 +120,27 @@ async function request(path, options = {}, retryCount = 0) {
   }
 
   let response;
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => {
+    controller.abort();
+  }, 15000);
   try {
     response = await fetch(`${API_BASE}${path}`, {
       method,
       headers: requestHeaders,
       body: payload,
+      signal: controller.signal,
     });
   } catch (_error) {
+    window.clearTimeout(timeoutId);
     throw new ApiError({
       code: "NETWORK_ERROR",
       message: "Проблема соединения",
       details: {},
       status: 0,
     });
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 
   const isJson = (response.headers.get("content-type") || "").includes("application/json");
