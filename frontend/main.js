@@ -615,7 +615,6 @@ async function submitWeightEntry() {
     return;
   }
   state.weightEntrySaving = true;
-  render();
 
   const withTimeout = (promise, timeoutMs = 15000) => Promise.race([
     promise,
@@ -624,33 +623,29 @@ async function submitWeightEntry() {
     }),
   ]);
 
+  // Optimistic UI update: close modal immediately and update local graph.
+  if (!state.user.profile) {
+    state.user.profile = {};
+  }
+  state.user.profile.weightKg = parsed;
+  if (!Array.isArray(state.weightChart?.items)) {
+    state.weightChart = { items: [] };
+  }
+  const today = formatDateForApi(new Date());
+  const existingIndex = state.weightChart.items.findIndex((item) => String(item?.date) === today);
+  if (existingIndex >= 0) {
+    state.weightChart.items[existingIndex] = { date: today, weight: parsed };
+  } else {
+    state.weightChart.items.push({ date: today, weight: parsed });
+    state.weightChart.items.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  }
+  state.weightEntryOpen = false;
+  render();
+
   try {
     await withTimeout(logWeight(formatDateForApi(new Date()), parsed));
     showToast("Вес сохранен!", "info");
-    if (!state.user.profile) {
-      state.user.profile = {};
-    }
-    state.user.profile.weightKg = parsed;
-    if (!Array.isArray(state.weightChart?.items)) {
-      state.weightChart = { items: [] };
-    }
-    const today = formatDateForApi(new Date());
-    const existingIndex = state.weightChart.items.findIndex((item) => String(item?.date) === today);
-    if (existingIndex >= 0) {
-      state.weightChart.items[existingIndex] = { date: today, weight: parsed };
-    } else {
-      state.weightChart.items.push({ date: today, weight: parsed });
-      state.weightChart.items.sort((a, b) => String(a.date).localeCompare(String(b.date)));
-    }
-    state.weightEntrySaving = false;
-    state.weightEntryOpen = false;
-    render();
-    refreshUsageAndSubscription().then(() => {
-      render();
-    }).catch(() => {
-      // keep optimistic UI state
-    });
-    return;
+    refreshUsageAndSubscription().then(render).catch(() => {});
   } catch (err) {
     if (err instanceof Error && err.message === "timeout") {
       showToast("Сохранение веса заняло слишком много времени");
@@ -659,7 +654,6 @@ async function submitWeightEntry() {
     }
   } finally {
     state.weightEntrySaving = false;
-    render();
   }
 }
 
@@ -2476,7 +2470,6 @@ async function submitGoalEntry() {
   }
 
   state.goalEntrySaving = true;
-  render();
 
   const withTimeout = (promise, timeoutMs = 15000) => Promise.race([
     promise,
@@ -2485,22 +2478,17 @@ async function submitGoalEntry() {
     }),
   ]);
 
+  state.goalEntryOpen = false;
+  render();
+
   try {
     const res = await withTimeout(updateProfileGoal(parsed));
     if (!state.user.profile) {
       state.user.profile = {};
     }
     state.user.profile.dailyGoal = Number(res?.dailyGoal || parsed);
-    state.goalEntrySaving = false;
-    state.goalEntryOpen = false;
     showToast("Цель обновлена", "info");
-    render();
-    refreshUsageAndSubscription().then(() => {
-      render();
-    }).catch(() => {
-      // keep optimistic UI state
-    });
-    return;
+    refreshUsageAndSubscription().then(render).catch(() => {});
   } catch (err) {
     if (err instanceof Error && err.message === "timeout") {
       showToast("Сохранение цели заняло слишком много времени");
