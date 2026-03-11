@@ -2156,6 +2156,42 @@ function createAnalyticsLoadingCard() {
   return card;
 }
 
+async function openShareScreen(options = {}) {
+  const { pushRoute = true } = options;
+  if (!pushRoute) {
+    suppressNextHistoryPush = true;
+  }
+  setBusy(true);
+  try {
+    const today = getTodayUtcDate();
+    const [profile, streak, dailyStats] = await Promise.all([
+      getMe().catch(() => state.user),
+      getStreak().catch(() => ({ currentStreak: 0, bestStreak: 0, lastCompletedDate: null })),
+      getStatsDaily(today).catch(() => ({ calories_kcal: 0, protein_g: 0, fat_g: 0, carbs_g: 0, mealsCount: 0 })),
+    ]);
+
+    if (profile) {
+      state.user = profile;
+      syncReminderStateFrom(state.user);
+    }
+
+    const dailyGoal = getDailyTarget(profile?.profile || state.user?.profile) || 2000;
+
+    state.shareData = {
+      currentStreak: streak?.currentStreak ?? 0,
+      todayCalories: dailyStats?.calories_kcal ?? 0,
+      dailyGoal,
+      motivationalQuote: pickRandomQuote(QUOTES_SHARE_SHORT).text,
+    };
+    state.screen = "share";
+  } catch (error) {
+    showToast(mapFriendlyError(error));
+  } finally {
+    setBusy(false);
+    render();
+  }
+}
+
 function renderShareScreen() {
   const shareData = state.shareData || {
     currentStreak: state.streak?.currentStreak ?? 0,
