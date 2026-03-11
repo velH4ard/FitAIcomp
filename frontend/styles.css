@@ -1347,6 +1347,38 @@
   margin-bottom: 1rem;
 }
 
+.inline-icon-btn {
+  width: 1.5rem;
+  height: 1.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(92,74,53,0.16);
+  border-radius: 999px;
+  background: rgba(255,255,255,0.7);
+  color: var(--bark);
+  cursor: pointer;
+  opacity: 0.85;
+  pointer-events: auto;
+}
+
+.inline-icon-btn:active {
+  transform: translateY(1px);
+}
+
+.inline-weight-btn {
+  padding: 0.3rem 0.65rem;
+  background: linear-gradient(180deg, #7a9e7e 0%, #4d7253 100%);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 4px 12px rgba(77,114,83,0.28);
+}
+
 .daily-card-row {
   display: flex;
   align-items: center;

@@ -883,10 +883,9 @@ function createDailySummaryCard() {
   
   const editGoalBtn = document.createElement("button");
   editGoalBtn.type = "button";
-  editGoalBtn.className = "btn-icon-only";
-  editGoalBtn.style.cssText = "width: 1.5rem; height: 1.5rem; opacity: 0.6; padding: 0; background: none; border: none; cursor: pointer; color: var(--bark);";
+  editGoalBtn.className = "inline-icon-btn";
   editGoalBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:0.875rem;height:0.875rem;"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>`;
-  editGoalBtn.onclick = () => {
+  editGoalBtn.addEventListener("click", () => {
     const newVal = window.prompt("Введите новую дневную цель (ккал):", target);
     if (!newVal) return;
     const parsed = parseInt(newVal, 10);
@@ -910,7 +909,7 @@ function createDailySummaryCard() {
         setBusy(false);
         render();
       });
-  };
+  });
   
   subLabel.append(editGoalBtn);
   const remainingSpan = document.createElement("span");
@@ -2004,10 +2003,32 @@ function renderMainScreen() {
     
     calCard.append(chartWrap);
     root.append(calCard);
+  } else {
+    const calCard = document.createElement("section");
+    calCard.className = "glass fade-up d3";
+    calCard.style.padding = "1.25rem";
+    calCard.style.marginTop = "1rem";
+    const title = document.createElement("p");
+    title.className = "analytics-label";
+    title.textContent = "Калории за неделю";
+    const hint = document.createElement("p");
+    hint.className = "analytics-hint";
+    hint.style.marginTop = "0.5rem";
+    hint.textContent = "Пока нет данных для графика.";
+    calCard.append(title, hint);
+    root.append(calCard);
   }
 
   // Weight Chart
-  if (state.weightChart && state.weightChart.items && state.weightChart.items.length > 0) {
+  const weightItems = Array.isArray(state.weightChart?.items) ? [...state.weightChart.items] : [];
+  if (!weightItems.length && Number.isFinite(Number(state.user?.profile?.weightKg))) {
+    weightItems.push({
+      date: getTodayUtcDate(),
+      weight: Number(state.user.profile.weightKg),
+    });
+  }
+
+  if (weightItems.length > 0) {
     const weightCard = document.createElement("section");
     weightCard.className = "glass fade-up d3";
     weightCard.style.padding = "1.25rem";
@@ -2025,15 +2046,14 @@ function renderMainScreen() {
     
     const weightAddBtn = document.createElement("button");
     weightAddBtn.type = "button";
-    weightAddBtn.className = "btn-icon-only";
-    weightAddBtn.style.cssText = "padding: 0.25rem 0.5rem; background: var(--sage); color: white; border: none; border-radius: 4px; font-size: 0.75rem; font-weight: 500; cursor: pointer;";
+    weightAddBtn.className = "inline-weight-btn";
     weightAddBtn.textContent = "+ Вес";
-    weightAddBtn.onclick = () => handleAddWeight();
+    weightAddBtn.addEventListener("click", handleAddWeight);
     
     weightHeader.append(weightTitle, weightAddBtn);
     weightCard.append(weightHeader);
     
-    const items = state.weightChart.items;
+    const items = weightItems;
     
     const width = 320;
     const height = 100;
@@ -2082,10 +2102,9 @@ function renderMainScreen() {
     
     const weightAddBtn = document.createElement("button");
     weightAddBtn.type = "button";
-    weightAddBtn.className = "btn-icon-only";
-    weightAddBtn.style.cssText = "padding: 0.25rem 0.5rem; background: var(--sage); color: white; border: none; border-radius: 4px; font-size: 0.75rem; font-weight: 500; cursor: pointer;";
+    weightAddBtn.className = "inline-weight-btn";
     weightAddBtn.textContent = "+ Внести первый вес";
-    weightAddBtn.onclick = () => handleAddWeight();
+    weightAddBtn.addEventListener("click", handleAddWeight);
     
     weightCard.append(weightTitle, weightAddBtn);
     root.append(weightCard);
