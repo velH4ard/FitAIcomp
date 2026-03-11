@@ -574,6 +574,9 @@ function toNumber(value, fallback = 0) {
 
 
 function handleAddWeight() {
+  if (state.busy) {
+    return;
+  }
   const currentWeight = Number(state.user?.profile?.weightKg) || 70;
   state.weightEntryValue = String(currentWeight);
   state.weightEntryOpen = true;
@@ -603,7 +606,17 @@ async function submitWeightEntry() {
       state.user.profile = {};
     }
     state.user.profile.weightKg = parsed;
-    await updateProfile(state.user.profile);
+    if (!Array.isArray(state.weightChart?.items)) {
+      state.weightChart = { items: [] };
+    }
+    const today = formatDateForApi(new Date());
+    const existingIndex = state.weightChart.items.findIndex((item) => String(item?.date) === today);
+    if (existingIndex >= 0) {
+      state.weightChart.items[existingIndex] = { date: today, weight: parsed };
+    } else {
+      state.weightChart.items.push({ date: today, weight: parsed });
+      state.weightChart.items.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    }
     await refreshAfterResume();
     state.weightEntryOpen = false;
   } catch (err) {
@@ -2352,46 +2365,73 @@ function createScreenLoader() {
 
 function renderWeightEntryModal() {
   const overlay = document.createElement("div");
-  overlay.className = "streak-modal-overlay";
-  overlay.style.zIndex = "1200";
+  overlay.className = "weight-entry-overlay";
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) {
+      closeWeightEntry();
+    }
+  });
 
   const modal = document.createElement("section");
-  modal.className = "streak-modal";
-  modal.style.maxWidth = "22rem";
+  modal.className = "weight-entry-card";
   modal.setAttribute("role", "dialog");
   modal.setAttribute("aria-modal", "true");
+  modal.addEventListener("click", (event) => {
+    event.stopPropagation();
+  });
+
+  const badge = document.createElement("p");
+  badge.className = "weight-entry-badge";
+  badge.textContent = "вес";
 
   const title = document.createElement("h3");
-  title.className = "streak-modal-title";
-  title.textContent = "Текущий вес";
+  title.className = "weight-entry-title";
+  title.textContent = "Добавьте текущий вес";
 
   const hint = document.createElement("p");
-  hint.className = "streak-modal-hint";
-  hint.textContent = "Введите вес в килограммах";
+  hint.className = "weight-entry-hint";
+  hint.textContent = "Нужно для красивого графика и точных рекомендаций";
+
+  const inputWrap = document.createElement("label");
+  inputWrap.className = "weight-entry-input-wrap";
 
   const input = document.createElement("input");
-  input.className = "input-organic";
+  input.className = "weight-entry-input";
   input.type = "number";
   input.min = "20";
   input.max = "400";
   input.step = "0.1";
+  input.placeholder = "70.0";
   input.value = state.weightEntryValue;
   input.addEventListener("input", () => {
     state.weightEntryValue = input.value;
   });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      submitWeightEntry();
+    }
+  });
+
+  const unit = document.createElement("span");
+  unit.className = "weight-entry-unit";
+  unit.textContent = "кг";
+  inputWrap.append(input, unit);
 
   const actions = document.createElement("div");
-  actions.style.cssText = "display:flex;gap:0.5rem;margin-top:1rem;";
+  actions.className = "weight-entry-actions";
   const save = createPrimaryButton("Сохранить", submitWeightEntry, {
     disabled: state.busy,
     loading: state.busy,
   });
+  save.classList.add("weight-entry-save");
   const cancel = createSecondaryButton("Отмена", closeWeightEntry, {
     disabled: state.busy,
   });
+  cancel.classList.add("weight-entry-cancel");
   actions.append(save, cancel);
 
-  modal.append(title, hint, input, actions);
+  modal.append(badge, title, hint, inputWrap, actions);
   overlay.append(modal);
   return overlay;
 }
