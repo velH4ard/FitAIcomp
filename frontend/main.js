@@ -642,8 +642,15 @@ async function submitWeightEntry() {
       state.weightChart.items.push({ date: today, weight: parsed });
       state.weightChart.items.sort((a, b) => String(a.date).localeCompare(String(b.date)));
     }
-    await refreshUsageAndSubscription();
+    state.weightEntrySaving = false;
     state.weightEntryOpen = false;
+    render();
+    refreshUsageAndSubscription().then(() => {
+      render();
+    }).catch(() => {
+      // keep optimistic UI state
+    });
+    return;
   } catch (err) {
     if (err instanceof Error && err.message === "timeout") {
       showToast("Сохранение веса заняло слишком много времени");
@@ -2484,9 +2491,16 @@ async function submitGoalEntry() {
       state.user.profile = {};
     }
     state.user.profile.dailyGoal = Number(res?.dailyGoal || parsed);
-    await refreshUsageAndSubscription();
+    state.goalEntrySaving = false;
     state.goalEntryOpen = false;
     showToast("Цель обновлена", "info");
+    render();
+    refreshUsageAndSubscription().then(() => {
+      render();
+    }).catch(() => {
+      // keep optimistic UI state
+    });
+    return;
   } catch (err) {
     if (err instanceof Error && err.message === "timeout") {
       showToast("Сохранение цели заняло слишком много времени");
