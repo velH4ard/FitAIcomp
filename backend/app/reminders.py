@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 import random
 import uuid
@@ -16,7 +17,16 @@ REMINDER_TYPE_DAILY_PROGRESS = "daily_progress"
 REMINDER_TYPE_WEEKLY_REPORT = "weekly_report"
 REMINDER_TYPE_MONTHLY_REPORT = "monthly_report"
 REMINDER_TYPE_INACTIVITY_2D = "inactivity_2d"
+REMINDER_TYPE_FREE_MOTIVATION = "free_motivation"
 ALLOWED_NOTIFICATION_TONES = {"soft", "hard", "balanced"}
+
+FREE_MOTIVATION_MESSAGES = [
+    "Ты уже начал(а) путь — с Premium будет проще держать ритм каждый день. Попробуй расширенный лимит и отчеты 💪",
+    "Один шаг сегодня = минус срыв завтра. В Premium доступны подробные отчеты и больше анализов фото 📸",
+    "Хочешь видеть картину по неделе и месяцу? Подключи Premium и контролируй прогресс точнее 📊",
+    "Регулярность решает. С Premium ты получишь больше попыток в день и полезные сводки по результатам 🔥",
+    "Иногда достаточно маленького апгрейда, чтобы не останавливаться. Попробуй Premium и продолжай движение к цели ✨",
+]
 
 DAILY_NO_ENTRIES_MESSAGES = [
     "Сегодня еще нет записей по еде. Добавь первый прием пищи, чтобы держать ритм.",
@@ -166,6 +176,12 @@ def _build_daily_message(
     if progress <= 1.1:
         return _pick_message(choice_fn, on_target_pool)
     return _pick_message(choice_fn, over_goal_pool)
+
+
+def _free_motivation_cooldown_days(user_id: str, target_date: date) -> int:
+    seed = f"{user_id}:{target_date.isoformat()}".encode("utf-8")
+    digest = hashlib.sha256(seed).hexdigest()
+    return 2 + (int(digest[:2], 16) % 2)
 
 
 def _build_weekly_report_message(
@@ -359,15 +375,15 @@ async def run_daily_reminders(
         SELECT
             u.id,
             u.telegram_id,
+            u.subscription_status,
             u.profile,
             u.daily_goal_auto,
             u.daily_goal_override,
             us.notification_tone,
             COALESCE(ds.calories_kcal, 0) AS calories_kcal
         FROM users u
-        JOIN user_settings us
+        LEFT JOIN user_settings us
           ON us.user_id = u.id
-         AND us.notifications_enabled = TRUE
         LEFT JOIN daily_stats ds
           ON ds.user_id = u.id
          AND ds.date = $1
@@ -382,6 +398,48 @@ async def run_daily_reminders(
     for row in rows:
         record = dict(row)
         user_id = str(record["id"])
+        subscription_status = str(record.get("subscription_status") or "").lower()
+
+        if subscription_status != "active":
+            last_motivation_delivery = await _fetch_last_delivery_date(
+                conn,
+                user_id=user_id,
+                reminder_type=REMINDER_TYPE_FREE_MOTIVATION,
+            )
+            if last_motivation_delivery is not None:
+                delta_days = (target_date - last_motivation_delivery).days
+                cooldown_days = _free_motivation_cooldown_days(user_id, target_date)
+                if delta_days < cooldown_days:
+                    stats.skipped += 1
+                    continue
+
+            reserved = await _reserve_delivery(
+                conn,
+                user_id=user_id,
+                run_date=target_date,
+                reminder_type=REMINDER_TYPE_FREE_MOTIVATION,
+            )
+            if not reserved:
+                stats.skipped += 1
+                continue
+
+            stats.eligible += 1
+            chat_id = int(record["telegram_id"])
+            try:
+                await sender(chat_id, _pick_message(choice_fn, FREE_MOTIVATION_MESSAGES))
+                stats.sent += 1
+                await sleep_fn(0.03 + (max(0.0, min(1.0, random_fn())) * 0.05))
+            except Exception:
+                stats.failed += 1
+                await _release_delivery_reservation(
+                    conn,
+                    user_id=user_id,
+                    run_date=target_date,
+                    reminder_type=REMINDER_TYPE_FREE_MOTIVATION,
+                )
+                logger.warning("REMINDER_SEND_FAIL job_run_id=%s user_id=%s type=%s", run_id, user_id, REMINDER_TYPE_FREE_MOTIVATION)
+            continue
+
         effective_goal = resolve_effective_goal(record)
         tone = _normalize_notification_tone(record.get("notification_tone"))
         if effective_goal is None or effective_goal <= 0:
@@ -460,10 +518,7 @@ async def run_weekly_reports(
             u.daily_goal_auto,
             u.daily_goal_override
         FROM users u
-        JOIN user_settings us
-          ON us.user_id = u.id
-         AND us.notifications_enabled = TRUE
-        WHERE u.subscription_status <> 'blocked'
+        WHERE u.subscription_status = 'active'
           AND u.telegram_id IS NOT NULL
         """,
     )
@@ -579,10 +634,7 @@ async def run_monthly_reports(
             u.daily_goal_auto,
             u.daily_goal_override
         FROM users u
-        JOIN user_settings us
-          ON us.user_id = u.id
-         AND us.notifications_enabled = TRUE
-        WHERE u.subscription_status <> 'blocked'
+        WHERE u.subscription_status = 'active'
           AND u.telegram_id IS NOT NULL
         """,
     )
@@ -703,10 +755,7 @@ async def run_inactivity_2d_reminders(
             u.id,
             u.telegram_id
         FROM users u
-        JOIN user_settings us
-          ON us.user_id = u.id
-         AND us.notifications_enabled = TRUE
-        WHERE u.subscription_status <> 'blocked'
+        WHERE u.subscription_status = 'active'
           AND u.telegram_id IS NOT NULL
           AND NOT EXISTS (
               SELECT 1
