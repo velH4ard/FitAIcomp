@@ -372,6 +372,7 @@ async def run_daily_reminders(
           ON ds.user_id = u.id
          AND ds.date = $1
         WHERE u.subscription_status <> 'blocked'
+          AND u.telegram_id IS NOT NULL
         """,
         target_date,
     )
@@ -463,6 +464,7 @@ async def run_weekly_reports(
           ON us.user_id = u.id
          AND us.notifications_enabled = TRUE
         WHERE u.subscription_status <> 'blocked'
+          AND u.telegram_id IS NOT NULL
         """,
     )
 

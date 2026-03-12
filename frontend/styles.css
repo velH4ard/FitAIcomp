@@ -2177,8 +2177,10 @@
 ═══════════════════════════════════════════ */
 .reminder-toggle-track {
   position: relative;
+  appearance: none;
   width: 2.75rem;
   height: 1.5rem;
+  padding: 0;
   border-radius: var(--r-pill);
   background: var(--cream-deep);
   border: 1.5px solid rgba(255,255,255,0.7);
