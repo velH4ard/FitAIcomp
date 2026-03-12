@@ -1532,6 +1532,14 @@ function renderAnalysisSummaryScreen() {
   );
   feedback.append(q, actions);
   root.append(feedback);
+
+  root.append(
+    createPrimaryButton("На главный экран", () => {
+      state.screen = "main";
+      render();
+    }, { disabled: state.busy }),
+  );
+
   return root;
 }
 
@@ -2690,7 +2698,8 @@ function renderHeader(screen) {
 
   const { title, subtitle } = getHeaderMeta(screen);
   const isMain = screen === "main";
-  const left = isMain ? null : createHeaderBackButton(goBackFromHeader);
+  const isSummary = screen === "analysisSummary";
+  const left = isMain || isSummary ? null : createHeaderBackButton(goBackFromHeader);
   const right = isMain ? createMainHeaderActions() : null;
 
   appHeader.innerHTML = "";
@@ -2810,6 +2819,13 @@ function render() {
 }
 
 window.addEventListener("popstate", (event) => {
+  if (state.screen === "analysisSummary") {
+    suppressNextHistoryPush = true;
+    state.screen = "main";
+    render();
+    return;
+  }
+
   const historyScreen = event.state?.screen;
   if (historyScreen && historyScreen !== state.screen) {
     suppressNextHistoryPush = true;
