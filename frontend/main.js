@@ -1954,7 +1954,7 @@ function renderMainScreen() {
   // ===== Charts Section =====
   const weeklyDays = Array.isArray(state.weeklyStats?.days) ? state.weeklyStats.days : [];
   const daysWithCalories = weeklyDays.filter((day) => Number(day?.calories_kcal || 0) > 0);
-  const showCaloriesChart = daysWithCalories.length >= 2;
+  const showCaloriesChart = daysWithCalories.length >= 1;
 
   const weightItems = Array.isArray(state.weightChart?.items) ? [...state.weightChart.items] : [];
   const onboardingWeight = getProfileWeightKg();
