@@ -1499,11 +1499,17 @@ function renderAnalysisAdjustScreen() {
 function renderAnalysisSummaryScreen() {
   const root = createRoot();
   const payload = state.analysisStep2Result;
+
+  const goMainButton = createPrimaryButton("На главный экран", () => {
+    state.screen = "main";
+    render();
+  }, { disabled: state.busy });
+
   if (!payload?.meal?.result) {
     const empty = document.createElement("p");
     empty.className = "result-empty";
     empty.textContent = "Нет данных анализа";
-    root.append(empty);
+    root.append(empty, goMainButton);
     return root;
   }
 
@@ -1512,6 +1518,8 @@ function renderAnalysisSummaryScreen() {
     isPremium: state.subscription?.status === "active",
     hideWarningChip: false,
   }));
+
+  root.append(goMainButton);
 
   const feedback = document.createElement("section");
   feedback.className = "feedback-card fade-up d3";
@@ -1532,13 +1540,6 @@ function renderAnalysisSummaryScreen() {
   );
   feedback.append(q, actions);
   root.append(feedback);
-
-  root.append(
-    createPrimaryButton("На главный экран", () => {
-      state.screen = "main";
-      render();
-    }, { disabled: state.busy }),
-  );
 
   return root;
 }
