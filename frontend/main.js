@@ -11,7 +11,6 @@ import {
   getWeightChart,
   patchNotificationSettings,
   getStatsDaily,
-  getStatsWeekly,
   getUsageToday,
   logWeight,
   getStreak,
@@ -73,7 +72,6 @@ const state = {
   usage: null,
   subscription: null,
   dailyStats: null,
-  weeklyStats: null,
   streak: null,
   streakModalOpen: false,
   pendingPaymentId: localStorage.getItem(STORAGE_PENDING_PAYMENT_KEY),
@@ -1151,18 +1149,16 @@ async function refreshUsageAndSubscription() {
   if (!state.token) {
     return;
   }
-  const [usage, subscription, dailyStats, weeklyStats, weightChart, streak] = await Promise.all([
+  const [usage, subscription, dailyStats, weightChart, streak] = await Promise.all([
     getUsageToday(),
     getSubscription(),
     getStatsDaily(getTodayUtcDate()),
-    getStatsWeekly().catch(() => ({ days: [] })),
     getWeightChart().catch(() => ({ items: [] })),
     getStreak().catch(() => ({ currentStreak: 0, bestStreak: 0, lastCompletedDate: null })),
   ]);
   state.usage = usage;
   state.subscription = subscription;
   state.dailyStats = dailyStats;
-  state.weeklyStats = weeklyStats;
   state.weightChart = weightChart;
   state.streak = streak;
 }
@@ -1961,113 +1957,9 @@ function renderMainScreen() {
   }
 
   // ===== Charts Section =====
-  const weeklyDays = Array.isArray(state.weeklyStats?.days) ? state.weeklyStats.days : [];
-  const daysWithCalories = weeklyDays.filter((day) => Number(day?.calories_kcal || 0) > 0);
-  const showCaloriesChart = daysWithCalories.length >= 1;
-
   const weightItems = Array.isArray(state.weightChart?.items) ? [...state.weightChart.items] : [];
   const onboardingWeight = getProfileWeightKg();
   const showWeightChart = weightItems.length >= 2;
-
-  if (showCaloriesChart) {
-    const calCard = document.createElement("section");
-    calCard.className = "glass fade-up d3";
-    calCard.style.padding = "1.25rem";
-    calCard.style.marginTop = "1rem";
-    
-    const calHeader = document.createElement("div");
-    calHeader.style.display = "flex";
-    calHeader.style.justifyContent = "space-between";
-    calHeader.style.alignItems = "baseline";
-    calHeader.style.marginBottom = "1rem";
-    
-    const calTitle = document.createElement("p");
-    calTitle.className = "analytics-label";
-    calTitle.textContent = "Калории за неделю";
-    
-    const calSub = document.createElement("p");
-    calSub.style.fontSize = "0.75rem";
-    calSub.style.color = "var(--bark)";
-    calSub.style.opacity = "0.6";
-    calSub.textContent = "ккал/день";
-    
-    calHeader.append(calTitle, calSub);
-    calCard.append(calHeader);
-    
-    const chartWrap = document.createElement("div");
-    chartWrap.style.display = "flex";
-    chartWrap.style.alignItems = "flex-end";
-    chartWrap.style.justifyContent = "space-between";
-    chartWrap.style.height = "100px";
-    chartWrap.style.gap = "4px";
-    
-    const days = weeklyDays;
-    const maxCal = Math.max(1, ...days.map(d => d.calories_kcal || 0));
-    const goalCal = getDailyTarget(state.user?.profile) || 2000;
-    const chartMax = Math.max(maxCal, goalCal * 1.2); // Give some headroom above goal
-    
-    days.forEach(day => {
-      const col = document.createElement("div");
-      col.style.display = "flex";
-      col.style.flexDirection = "column";
-      col.style.alignItems = "center";
-      col.style.flex = "1";
-      col.style.gap = "4px";
-      
-      const barWrapBox = document.createElement("div");
-      barWrapBox.style.position = "relative";
-      barWrapBox.style.width = "100%";
-      barWrapBox.style.height = "100%";
-      barWrapBox.style.display = "flex";
-      barWrapBox.style.alignItems = "flex-end";
-      barWrapBox.style.justifyContent = "center";
-      barWrapBox.style.borderRadius = "4px";
-      barWrapBox.style.backgroundColor = "rgba(0,0,0,0.03)";
-      
-      const val = day.calories_kcal || 0;
-      const pct = (val / chartMax) * 100;
-      const normalizedPct = val > 0 ? Math.max(8, pct) : 4;
-      
-      const bar = document.createElement("div");
-      bar.style.width = "100%";
-      bar.style.maxWidth = "24px";
-      bar.style.height = `${Math.min(100, normalizedPct)}%`;
-      bar.style.backgroundColor = val > goalCal ? "var(--clay)" : "var(--sage)";
-      bar.style.borderRadius = "4px";
-      bar.style.transition = "height 0.3s ease";
-      
-      barWrapBox.append(bar);
-      
-      const lbl = document.createElement("span");
-      lbl.style.fontSize = "0.625rem";
-      lbl.style.color = "var(--bark)";
-      lbl.style.opacity = "0.6";
-      const dateObj = new Date(`${day.date}T00:00:00Z`);
-      const dayNames = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
-      const dayIndex = Number.isNaN(dateObj.getTime()) ? 0 : dateObj.getUTCDay();
-      lbl.textContent = dayNames[dayIndex] || "-";
-      
-      col.append(barWrapBox, lbl);
-      chartWrap.append(col);
-    });
-    
-    calCard.append(chartWrap);
-    root.append(calCard);
-  } else if (weeklyDays.length > 0) {
-    const calCard = document.createElement("section");
-    calCard.className = "glass fade-up d3";
-    calCard.style.padding = "1.25rem";
-    calCard.style.marginTop = "1rem";
-    const title = document.createElement("p");
-    title.className = "analytics-label";
-    title.textContent = "Калории за неделю";
-    const hint = document.createElement("p");
-    hint.className = "analytics-hint";
-    hint.style.marginTop = "0.5rem";
-    hint.textContent = "Добавьте еще приемы пищи, и здесь появится график динамики.";
-    calCard.append(title, hint);
-    root.append(calCard);
-  }
 
   // Weight Chart
   if (showWeightChart) {
