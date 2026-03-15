@@ -92,6 +92,11 @@ DAILY_OVER_GOAL_MESSAGES_HARD = [
     "Цель превышена. Нужна корректировка рациона до конца дня.",
 ]
 
+PREMIUM_NO_GOAL_MESSAGES = [
+    "Держим ритм: добавь хотя бы один приём пищи сегодня, чтобы видеть прогресс в динамике.",
+    "Не теряй темп — зафиксируй первый приём пищи сегодня и продолжай движение к цели.",
+]
+
 WEEKLY_EMPTY_MESSAGES = [
     "📊 На этой неделе пока нет записей. Начни с одного приема пищи сегодня — и ритм вернется 💪",
     "📊 За последние 7 дней еще нет данных. Добавь первый прием пищи и запусти новый стрик 💪",
@@ -117,6 +122,12 @@ class ReminderRunStats:
     sent: int = 0
     skipped: int = 0
     failed: int = 0
+    premium_eligible: int = 0
+    premium_sent: int = 0
+    free_eligible: int = 0
+    free_sent: int = 0
+    skipped_no_goal: int = 0
+    skipped_cooldown: int = 0
 
 
 def _pick_message(choice_fn: Callable[[list[str]], str], pool: list[str]) -> str:
@@ -411,6 +422,7 @@ async def run_daily_reminders(
                 cooldown_days = _free_motivation_cooldown_days(user_id, target_date)
                 if delta_days < cooldown_days:
                     stats.skipped += 1
+                    stats.skipped_cooldown += 1
                     continue
 
             reserved = await _reserve_delivery(
@@ -424,10 +436,12 @@ async def run_daily_reminders(
                 continue
 
             stats.eligible += 1
+            stats.free_eligible += 1
             chat_id = int(record["telegram_id"])
             try:
                 await sender(chat_id, _pick_message(choice_fn, FREE_MOTIVATION_MESSAGES))
                 stats.sent += 1
+                stats.free_sent += 1
                 await sleep_fn(0.03 + (max(0.0, min(1.0, random_fn())) * 0.05))
             except Exception:
                 stats.failed += 1
@@ -442,11 +456,8 @@ async def run_daily_reminders(
 
         effective_goal = resolve_effective_goal(record)
         tone = _normalize_notification_tone(record.get("notification_tone"))
-        if effective_goal is None or effective_goal <= 0:
-            stats.skipped += 1
-            continue
-
         stats.eligible += 1
+        stats.premium_eligible += 1
         calories = float(record.get("calories_kcal") or 0)
 
         reserved = await _reserve_delivery(
@@ -460,16 +471,21 @@ async def run_daily_reminders(
             continue
 
         chat_id = int(record["telegram_id"])
-        message_text = _build_daily_message(
-            today_calories=calories,
-            effective_goal=effective_goal,
-            tone=tone,
-            choice_fn=choice_fn,
-        )
+        if effective_goal is None or effective_goal <= 0:
+            stats.skipped_no_goal += 1
+            message_text = _pick_message(choice_fn, PREMIUM_NO_GOAL_MESSAGES)
+        else:
+            message_text = _build_daily_message(
+                today_calories=calories,
+                effective_goal=effective_goal,
+                tone=tone,
+                choice_fn=choice_fn,
+            )
 
         try:
             await sender(chat_id, message_text)
             stats.sent += 1
+            stats.premium_sent += 1
             await sleep_fn(0.03 + (max(0.0, min(1.0, random_fn())) * 0.05))
         except Exception:
             stats.failed += 1
@@ -482,7 +498,7 @@ async def run_daily_reminders(
             logger.warning("REMINDER_SEND_FAIL job_run_id=%s user_id=%s type=%s", run_id, user_id, REMINDER_TYPE_DAILY_PROGRESS)
 
     logger.info(
-        "DAILY_REMINDER_JOB_DONE job_run_id=%s date=%s total_scanned=%s eligible=%s sent=%s skipped=%s failed=%s",
+        "DAILY_REMINDER_JOB_DONE job_run_id=%s date=%s total_scanned=%s eligible=%s sent=%s skipped=%s failed=%s premium_eligible=%s premium_sent=%s free_eligible=%s free_sent=%s skipped_no_goal=%s skipped_cooldown=%s",
         run_id,
         target_date.isoformat(),
         stats.total_scanned,
@@ -490,6 +506,12 @@ async def run_daily_reminders(
         stats.sent,
         stats.skipped,
         stats.failed,
+        stats.premium_eligible,
+        stats.premium_sent,
+        stats.free_eligible,
+        stats.free_sent,
+        stats.skipped_no_goal,
+        stats.skipped_cooldown,
     )
     return stats
 
